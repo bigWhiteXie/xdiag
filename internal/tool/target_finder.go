@@ -178,8 +178,3 @@ func (t *TargetFinderTool) InvokableRun(ctx context.Context, argumentsInJSON str
 func (t *TargetFinderTool) Name() string {
 	return "target_finder"
 }
-
-// Description 返回工具描述
-func (t *TargetFinderTool) Description() string {
-	return "根据过滤器查找系统中的target，如服务器、数据库等。输入应为过滤器字符串，格式为 '字段 操作符 值'，支持多条件用逗号分隔"
-}

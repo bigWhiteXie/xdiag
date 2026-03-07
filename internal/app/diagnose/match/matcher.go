@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	"xdiag/internal/app/playbook"
-	"xdiag/internal/targets"
+	"xdiag/internal/app/targets"
+	"xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
@@ -199,11 +200,13 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 %s
 
 请分析目标资产的类型、标签和用户问题，选择最合适的诊断方案。
-输出格式为JSON:
+输出格式如下，禁止进行任何额外的解释说明:
+<output>
 {
   "playbook_name": "选择的playbook名称",
   "reason": "选择理由"
-}`,
+}
+</output>`,
 		state.Target.Name,
 		state.Target.Kind,
 		state.Target.Address,
@@ -225,9 +228,10 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 
 	// 解析响应
 	content := resp.Content
+	jsonstr := utils.ParseJsonByLabel("output", content)
 	var selection PlaybookSelection
-	if err := json.Unmarshal([]byte(content), &selection); err != nil {
-		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, content)
+	if err := json.Unmarshal([]byte(jsonstr), &selection); err != nil {
+		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, jsonstr)
 	}
 
 	// 查找选中的playbook
@@ -272,12 +276,15 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 %s
 
 请分析目标资产和用户问题，选择最合适的诊断参考。如果没有合适的诊断参考，请将status设置为0。
-输出格式为JSON:
+输出格式如下，禁止进行任何额外的解释说明:
+<output>
 {
   "ref_name": "选择的ref名称(如果没有合适的则为空字符串)",
   "status": 1或0 (1表示找到合适的ref, 0表示未找到),
   "reason": "选择理由或未找到的原因"
-}`,
+}
+</output>
+`,
 		state.Target.Name,
 		state.Target.Kind,
 		state.Target.Address,
@@ -302,8 +309,9 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 	// 解析响应
 	content := resp.Content
 	var selection RefSelection
-	if err := json.Unmarshal([]byte(content), &selection); err != nil {
-		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, content)
+	jsonstr := utils.ParseJsonByLabel("output", content)
+	if err := json.Unmarshal([]byte(jsonstr), &selection); err != nil {
+		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, jsonstr)
 	}
 
 	state.RefStatus = selection.Status

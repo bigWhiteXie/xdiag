@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/targets"
+	"xdiag/internal/app/targets"
 )
 
 var targetCmd = &cobra.Command{
@@ -47,7 +47,6 @@ xdiag target add --name prod-db --kind postgres --address db.example.com --port 
 		port, _ := cmd.Flags().GetInt("port")
 		username, _ := cmd.Flags().GetString("username")
 		password, _ := cmd.Flags().GetString("password")
-		sshKey, _ := cmd.Flags().GetString("ssh-key")
 		tags, _ := cmd.Flags().GetString("tags")
 
 		if name == "" || kind == "" || address == "" {
@@ -62,7 +61,6 @@ xdiag target add --name prod-db --kind postgres --address db.example.com --port 
 			Port:     port,
 			Username: username,
 			Password: password,
-			SSHKey:   sshKey,
 			Tags:     tags,
 		}
 
@@ -247,7 +245,6 @@ var targetUpdateCmd = &cobra.Command{
 		port, _ := cmd.Flags().GetInt("port")
 		username, _ := cmd.Flags().GetString("username")
 		password, _ := cmd.Flags().GetString("password")
-		sshKey, _ := cmd.Flags().GetString("ssh-key")
 		tags, _ := cmd.Flags().GetString("tags")
 
 		id, err := strconv.ParseUint(idStr, 10, 32)
@@ -294,9 +291,7 @@ var targetUpdateCmd = &cobra.Command{
 		if password != "" {
 			existingTarget.Password = password
 		}
-		if sshKey != "" {
-			existingTarget.SSHKey = sshKey
-		}
+
 		if tags != "" {
 			existingTarget.Tags = tags
 		}

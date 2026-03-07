@@ -9,25 +9,13 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Playbook 定义
+// Playbook 对应 introduction.yaml 文件结构，表示一个诊断方向
 type Playbook struct {
-	Name string
-	Desc string
-	Tags []string
-	Refs []Ref
-	Path string // 添加路径字段
-}
-
-// IntroductionYaml 对应 introduction.yaml 文件结构
-type IntroductionYaml struct {
-	Metadata Metadata `yaml:"metadata"`
-	Refs     []Ref    `yaml:"refs"`
-}
-
-type Metadata struct {
-	Name         string   `yaml:"name"`
-	Desc         string   `yaml:"desc"`
-	RequiredTags []string `yaml:"required_tags"` // 如果metadata中也包含tags
+	Name string   `yaml:"name"`
+	Desc string   `yaml:"desc"`
+	Tags []string `yaml:"required_tags"`
+	Refs []Ref    `yaml:"refs"`
+	Path string   // 添加路径字段，用于定位playbook目录
 }
 
 type Ref struct {
@@ -97,18 +85,13 @@ func LoadSinglePlaybook(path string) (*Playbook, error) {
 		return nil, err
 	}
 
-	var introYaml IntroductionYaml
-	if err := yaml.Unmarshal(introData, &introYaml); err != nil {
+	var playbook Playbook
+	if err := yaml.Unmarshal(introData, &playbook); err != nil {
 		return nil, err
 	}
 
-	playbook := &Playbook{
-		Name: introYaml.Metadata.Name,
-		Desc: introYaml.Metadata.Desc,
-		Tags: introYaml.Metadata.RequiredTags,
-		Refs: introYaml.Refs,
-		Path: path, // 保存路径
-	}
+	// 保存路径
+	playbook.Path = path
 
 	// 获取refs目录下的诊断方案
 	refsDir := filepath.Join(path, "refs")
@@ -152,5 +135,5 @@ func LoadSinglePlaybook(path string) (*Playbook, error) {
 		}
 	}
 
-	return playbook, nil
+	return &playbook, nil
 }

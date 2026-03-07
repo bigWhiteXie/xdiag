@@ -2,13 +2,17 @@ package match
 
 import (
 	"context"
+	"fmt"
 	"testing"
+
+	"xdiag/internal/app/playbook"
+	"xdiag/internal/app/targets"
+	"xdiag/internal/llm"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"xdiag/internal/app/playbook"
 )
 
 // MockRepo 模拟playbook.Repo
@@ -162,4 +166,125 @@ func TestMatchResult(t *testing.T) {
 	assert.False(t, failResult.Success)
 	assert.Nil(t, failResult.Playbook)
 	assert.Nil(t, failResult.Ref)
+}
+
+func TestMatcherLLM(t *testing.T) {
+	ctx := context.Background()
+
+	// 创建匹配器
+	llmConfig := &llm.ClientConfig{
+		APIKey:    "b6ddebfe0af182f2a015e81448b09d71.thjX2dtaj8XvAJ8d",
+		BaseURL:   "http://localhost:1234/v1",
+		ModelName: "glm-4.7-flash",
+		Provider:  "openai", // 使用 custom provider 兼容 OpenAI API
+	}
+	model, err := llm.NewClient(ctx, llmConfig)
+	assert.NoError(t, err)
+	assert.NotNil(t, model)
+	//todo:mock 基于内存的playbook的repo，并提供
+
+	matcher, _ := NewMatcher(&MockPlaybookRepo{}, model)
+	// 准备多个目标和问题
+	cases := []struct {
+		target   *targets.Target
+		question string
+		expected string
+		exist    bool
+	}{
+		{
+			target: &targets.Target{
+				Name: "db-server-01",
+				Kind: "postgres",
+				Tags: "database,production",
+			},
+			question: "数据库查询响应缓慢",
+			expected: "慢查询相关诊断",
+			exist:    true,
+		},
+		{
+			target: &targets.Target{
+				Name: "node-01",
+				Kind: "node",
+				Tags: "web,production",
+			},
+			question: "deploy_blackbox failed",
+			expected: "黑匣子安装部署失败",
+			exist:    true,
+		},
+		{
+			target: &targets.Target{
+				Name: "node-02",
+				Kind: "node",
+				Tags: "xos",
+			},
+			question: "xos卸载报错黑匣子卸载失败",
+			expected: "黑匣子卸载失败",
+			exist:    true,
+		},
+	}
+
+	// 批量匹配
+	fmt.Println("批量匹配结果:")
+	fmt.Println("=" + string(make([]byte, 60)))
+	for i, c := range cases {
+		result, err := matcher.Match(ctx, c.target, c.question)
+		if err != nil {
+			fmt.Printf("%d. [%s] 错误: %v\n", i+1, c.target.Name, err)
+			continue
+		}
+
+		if c.exist {
+			assert.Equal(t, c.expected, result.Ref.Name)
+			fmt.Printf("%d. [%s] ✓ %s -> %s\n",
+				i+1, c.target.Name, result.Playbook.Name, result.Ref.Name)
+		} else {
+			assert.Equal(t, result.Success, false)
+		}
+	}
+}
+
+type MockPlaybookRepo struct {
+	playbooks []playbook.Playbook
+}
+
+func (m *MockPlaybookRepo) ListPlaybooks(tags []string) ([]playbook.Playbook, error) {
+	return []playbook.Playbook{
+		{
+			Name: "postgres",
+			Desc: "负责postgres的问题诊断",
+			Refs: []playbook.Ref{
+				{
+					Name: "慢查询相关诊断",
+					Desc: "诊断各种慢查询的性能瓶颈",
+					Log:  "ref1 log",
+				},
+				{
+					Name: "数据库备份相关",
+					Desc: "数据库备份相关的问题",
+					Log:  "ref2 log",
+				},
+			},
+		},
+		{
+			Name: "xos-安装部署",
+			Desc: "诊断xos系统出现的各种安装部署问题和卸载相关问题",
+			Refs: []playbook.Ref{
+				{
+					Name: "黑匣子安装部署失败",
+					Desc: "诊断黑匣子安装失败的原因并进行修复",
+					Log:  "deploy blackbox failed...",
+				},
+				{
+					Name: "黑匣子卸载失败",
+					Desc: "解决由于黑匣子卸载失败导致的各种问题",
+					Log:  "ref2 log",
+				},
+			},
+		},
+	}, nil
+}
+
+func (m *MockPlaybookRepo) GetBook(playbookName, refName string) (*playbook.Book, error) {
+
+	return nil, nil
 }

@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"xdiag/internal/app/playbook"
 	"xdiag/internal/app/targets"
 
 	"github.com/cloudwego/eino/components/model"
@@ -13,6 +14,7 @@ var (
 type ServiceContext struct {
 	Model       model.ToolCallingChatModel
 	TargetsRepo targets.Repo
+	BookRepo    playbook.Repo
 }
 
 func SetModel(model model.ToolCallingChatModel) {
@@ -21,6 +23,10 @@ func SetModel(model model.ToolCallingChatModel) {
 
 func SetTargetsRepo(repo targets.Repo) {
 	svcCtx.TargetsRepo = repo
+}
+
+func SetBookRepo(repo playbook.Repo) {
+	svcCtx.BookRepo = repo
 }
 
 func GetServiceContext() *ServiceContext {
