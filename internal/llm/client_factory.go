@@ -8,16 +8,13 @@ import (
 	"github.com/cloudwego/eino/components/model"
 )
 
-// ToolCallingChatModel 是 Eino 框架中 ToolCallingChatModel 的别名
-type ToolCallingChatModel = model.ToolCallingChatModel
-
 // ModelProvider 定义了模型提供商类型
 type ModelProvider string
 
 const (
-	OpenAIProvider     ModelProvider = "openai"
-	AnthropicProvider  ModelProvider = "anthropic"
-	CustomProvider     ModelProvider = "custom"
+	OpenAIProvider      ModelProvider = "openai"
+	AnthropicProvider   ModelProvider = "anthropic"
+	CustomProvider      ModelProvider = "custom"
 	SiliconFlowProvider ModelProvider = "siliconflow"
 )
 
@@ -26,26 +23,27 @@ type ClientFactory struct{}
 
 // ClientConfig 包含创建客户端所需的配置
 type ClientConfig struct {
-	Provider  string
-	APIKey    string
-	BaseURL   string
-	ModelName string
+	APIKey     string `mapstructure:"api_key"`
+	BaseURL    string `mapstructure:"base_url"`
+	ModelName  string `mapstructure:"model_name"`
+	Provider   string `mapstructure:"provider"`
+	MaxRetries int    `mapstructure:"max_retries"`
 }
 
 // NewClient 根据配置创建相应的大模型客户端
-func (f *ClientFactory) NewClient(ctx context.Context, config *ClientConfig) (ToolCallingChatModel, error) {
+func NewClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChatModel, error) {
 	switch ModelProvider(config.Provider) {
 	case OpenAIProvider, SiliconFlowProvider, CustomProvider:
-		return f.createOpenAIClient(ctx, config)
+		return createOpenAIClient(ctx, config)
 	case AnthropicProvider:
-		return f.createAnthropicClient(ctx, config)
+		return createAnthropicClient(ctx, config)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
 }
 
 // createOpenAIClient 创建 OpenAI 客户端或其他兼容 OpenAI API 的服务
-func (f *ClientFactory) createOpenAIClient(ctx context.Context, config *ClientConfig) (ToolCallingChatModel, error) {
+func createOpenAIClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChatModel, error) {
 	// 使用 Eino 框架创建 OpenAI 客户端
 	client, err := eino_openai.NewChatModel(ctx, &eino_openai.ChatModelConfig{
 		BaseURL: config.BaseURL,
@@ -61,7 +59,7 @@ func (f *ClientFactory) createOpenAIClient(ctx context.Context, config *ClientCo
 }
 
 // createAnthropicClient 创建 Anthropic 客户端
-func (f *ClientFactory) createAnthropicClient(ctx context.Context, config *ClientConfig) (ToolCallingChatModel, error) {
+func createAnthropicClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChatModel, error) {
 	// 注意：这里我们暂时返回错误，因为 Anthropic 客户端需要额外的组件
 	// 在实际应用中，您需要添加 Anthropic 相关的 Eino 组件
 	return nil, fmt.Errorf("Anthropic provider not yet implemented")

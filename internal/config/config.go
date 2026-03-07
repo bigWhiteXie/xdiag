@@ -2,54 +2,251 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"xdiag/internal/llm"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
-// Config represents the main configuration structure
+const (
+	xdiagDirEnv = "XDIAG_DIR"
+)
+
+// Config 应用程序配置
 type Config struct {
-	LLM LLMConfig `mapstructure:"llm"`
+	LLM          llm.ClientConfig `mapstructure:"llm"`
+	PlaybooksDir string           `mapstructure:"playbooks_dir"`
+	DataDir      string           `mapstructure:"data_dir"`
 }
 
-// LLMConfig represents the LLM configuration
+// LLMConfig LLM相关配置
 type LLMConfig struct {
-	APIKey    string `mapstructure:"api_key"`
-	BaseURL   string `mapstructure:"base_url"`
-	Protocol  string `mapstructure:"protocol"`
-	ModelName string `mapstructure:"model_name"`
+	APIKey     string `mapstructure:"api_key"`
+	BaseURL    string `mapstructure:"base_url"`
+	ModelName  string `mapstructure:"model_name"`
+	Protocol   string `mapstructure:"protocol"`
+	MaxRetries int    `mapstructure:"max_retries"`
 }
 
-// LoadConfig loads the configuration from the config file
-func LoadConfig() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(filepath.Join("$HOME", ".xdiag"))
+// NewConfig 创建新的配置实例
+func NewConfig() *Config {
+	configDir := viper.GetString("config_dir")
+	if configDir == "" {
+		configDir = "$HOME/.xdiag"
+		if envDir := os.Getenv(xdiagDirEnv); envDir != "" {
+			configDir = envDir
+		}
+	}
 
-	// 绑定环境变量
-	viper.BindEnv("llm.api_key", "XDIAG_API_KEY")
-	viper.BindEnv("llm.base_url", "XDIAG_BASE_URL")
-	viper.BindEnv("llm.model_name", "XDIAG_MODEL_NAME")
+	// 展开$HOME环境变量
+	configDir = os.ExpandEnv(configDir)
+
+	// 确保配置目录存在
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		fmt.Printf("Failed to create config directory: %v\n", err)
+	}
+
+	// 确保playbooks目录存在
+	playbooksDir := viper.GetString("playbooks_dir")
+	if playbooksDir == "" {
+		playbooksDir = filepath.Join(configDir, "playbooks")
+	}
+
+	if err := os.MkdirAll(playbooksDir, 0755); err != nil {
+		fmt.Printf("Failed to create playbooks directory: %v\n", err)
+	}
+
+	// 确保数据目录存在
+	dataDir := viper.GetString("data_dir")
+	if dataDir == "" {
+		dataDir = filepath.Join(configDir, "data")
+	}
+
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Printf("Failed to create data directory: %v\n", err)
+	}
+
+	return &Config{
+		LLM: llm.ClientConfig{
+			APIKey:     viper.GetString("llm.api_key"),
+			BaseURL:    viper.GetString("llm.base_url"),
+			ModelName:  viper.GetString("llm.model_name"),
+			Provider:   viper.GetString("llm.provider"),
+			MaxRetries: viper.GetInt("llm.max_retries"),
+		},
+		PlaybooksDir: playbooksDir,
+		DataDir:      dataDir,
+	}
+}
+
+// LoadConfig 从配置文件加载配置
+func LoadConfig() (*Config, error) {
+	// 读取配置文件
+	if err := viper.ReadInConfig(); err != nil {
+		// 如果配置文件不存在，则返回带默认值的配置
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			return NewConfig(), nil
+		}
+		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	// 返回配置实例
+	return NewConfig(), nil
+}
+
+// GetConfigDir 获取配置目录路径
+func GetConfigDir() string {
+	configDir := os.Getenv("HOME")
+	if configDir == "" {
+		configDir = "."
+	}
+	return filepath.Join(configDir, ".xdiag")
+}
+
+// GetConfigPath 获取配置文件路径
+func GetConfigPath() string {
+	return filepath.Join(GetConfigDir(), "config.yaml")
+}
+
+// EnsureConfigDir 确保配置目录存在
+func EnsureConfigDir() error {
+	configDir := GetConfigDir()
+	return os.MkdirAll(configDir, 0755)
+}
+
+// SaveModelConfig 保存模型配置
+func SaveModelConfig(apiKey, baseURL, protocol, modelName string) error {
+	// 确保配置目录存在
+	if err := EnsureConfigDir(); err != nil {
+		return fmt.Errorf("创建配置目录失败：%v", err)
+	}
+
+	// 设置配置
+	viper.Set("llm.api_key", apiKey)
+	viper.Set("llm.base_url", baseURL)
+	viper.Set("llm.protocol", protocol)
+	viper.Set("llm.model_name", modelName)
+
+	// 写入配置文件
+	configPath := GetConfigPath()
+	if err := viper.WriteConfigAs(configPath); err != nil {
+		return fmt.Errorf("保存配置失败：%v", err)
+	}
+
+	return nil
+}
+
+// SetConfigValue 设置单个配置项
+func SetConfigValue(key, value string) error {
+	// 映射简写键名到完整路径
+	keyMap := map[string]string{
+		"api_key":    "llm.api_key",
+		"base_url":   "llm.base_url",
+		"provider":   "llm.provider",
+		"model_name": "llm.model_name",
+	}
+
+	fullKey, ok := keyMap[key]
+	if !ok {
+		return fmt.Errorf("未知配置项：%s", key)
+	}
+
+	// 加载现有配置
+	configPath := GetConfigPath()
+	viper.SetConfigFile(configPath)
 
 	if err := viper.ReadInConfig(); err != nil {
-		// 如果配置文件不存在，返回默认配置
+		// 如果配置文件不存在，创建一个新的
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			return &Config{
-				LLM: LLMConfig{
-					APIKey:    "",
-					BaseURL:   "https://api.openai.com/v1",
-					Protocol:  "openai",
-					ModelName: "",
-				},
-			}, nil
+			// 确保配置目录存在
+			if err := EnsureConfigDir(); err != nil {
+				return fmt.Errorf("创建配置目录失败：%v", err)
+			}
+
+			// 设置默认值
+			viper.Set("llm.api_key", "")
+			viper.Set("llm.base_url", "https://api.openai.com/v1")
+			viper.Set("llm.provider", "openai")
+			viper.Set("llm.model_name", "")
+		} else {
+			return fmt.Errorf("读取配置失败：%v", err)
 		}
-		return nil, fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+	// 设置新值
+	viper.Set(fullKey, value)
+
+	// 写入配置文件
+	if err := viper.WriteConfig(); err != nil {
+		return fmt.Errorf("保存配置失败：%v", err)
 	}
 
-	return &cfg, nil
+	return nil
+}
+
+// UnsetConfigValue 删除配置项
+func UnsetConfigValue(key string) error {
+	// 映射简写键名到完整路径
+	keyMap := map[string]string{
+		"api_key":    "llm.api_key",
+		"base_url":   "llm.base_url",
+		"protocol":   "llm.protocol",
+		"model_name": "llm.model_name",
+	}
+
+	fullKey, ok := keyMap[key]
+	if !ok {
+		return fmt.Errorf("未知配置项：%s", key)
+	}
+
+	// 读取配置文件内容
+	configPath := GetConfigPath()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败：%v", err)
+	}
+
+	// 解析 YAML
+	var config map[string]interface{}
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return fmt.Errorf("解析配置文件失败：%v", err)
+	}
+
+	// 从 map 中删除键
+	keys := strings.Split(fullKey, ".")
+	current := config
+	for i, k := range keys {
+		if i == len(keys)-1 {
+			delete(current, k)
+			break
+		}
+		if next, ok := current[k].(map[string]interface{}); ok {
+			current = next
+		} else {
+			return fmt.Errorf("配置路径不存在：%s", fullKey)
+		}
+	}
+
+	// 写回配置文件
+	newData, err := yaml.Marshal(&config)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败：%v", err)
+	}
+
+	err = os.WriteFile(configPath, newData, 0644)
+	if err != nil {
+		return fmt.Errorf("写入配置文件失败：%v", err)
+	}
+
+	// 重新加载配置到 viper
+	viper.SetConfigFile(configPath)
+	if err := viper.ReadInConfig(); err != nil {
+		return fmt.Errorf("重新加载配置失败：%v", err)
+	}
+
+	return nil
 }

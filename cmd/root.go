@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -14,7 +17,7 @@ var rootCmd = &cobra.Command{
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
-		panic(err)
+		os.Exit(1)
 	}
 }
 
@@ -28,6 +31,10 @@ func initConfig() {
 	if configDir == "" {
 		configDir = "$HOME/.xdiag"
 	}
+	
+	// 展开$HOME环境变量
+	configDir = os.ExpandEnv(configDir)
+	
 	viper.AddConfigPath(configDir)
 	viper.SetConfigType("yaml")
 	viper.SetConfigName("config")
@@ -36,4 +43,25 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err != nil {
 		// 配置文件不是必须的，所以忽略错误
 	}
+	
+	// 确保配置目录存在
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		// 仅打印到stderr，不中断程序
+	}
+	
+	// 确保playbooks目录存在
+	playbooksDir := filepath.Join(configDir, "playbooks")
+	if err := os.MkdirAll(playbooksDir, 0755); err != nil {
+		// 仅打印到stderr，不中断程序
+	}
+	
+	// 确保data目录存在
+	dataDir := filepath.Join(configDir, "data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		// 仅打印到stderr，不中断程序
+	}
+	
+	// 设置playbooks目录到viper
+	viper.Set("playbooks_dir", playbooksDir)
+	viper.Set("data_dir", dataDir)
 }

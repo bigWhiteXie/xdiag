@@ -158,24 +158,60 @@ func (r *SQLiteRepo) GetByName(ctx context.Context, name string) (*Target, error
 }
 
 // List 获取目标列表，支持过滤
-func (r *SQLiteRepo) List(ctx context.Context, filters map[string]string) ([]*Target, error) {
+func (r *SQLiteRepo) List(ctx context.Context, filters map[string]Op) ([]*Target, error) {
 	query := `SELECT id, name, kind, address, port, username, password, ssh_key, tags, created_at, updated_at FROM targets WHERE 1=1`
 	args := []interface{}{}
 
-	for key, value := range filters {
+	for key, op := range filters {
 		switch key {
 		case "kind":
-			query += " AND kind = ?"
-			args = append(args, value)
+			switch op.Op {
+			case "eq":
+				query += " AND kind = ?"
+				args = append(args, op.Val)
+			case "ne":
+				query += " AND kind != ?"
+				args = append(args, op.Val)
+			case "like":
+				query += " AND kind LIKE ?"
+				args = append(args, "%"+op.Val+"%")
+			}
 		case "tag":
-			query += " AND tags LIKE ?"
-			args = append(args, "%"+value+"%")
+			switch op.Op {
+			case "eq":
+				query += " AND tags = ?"
+				args = append(args, op.Val)
+			case "ne":
+				query += " AND tags != ?"
+				args = append(args, op.Val)
+			case "like":
+				query += " AND tags LIKE ?"
+				args = append(args, "%"+op.Val+"%")
+			}
 		case "name":
-			query += " AND name LIKE ?"
-			args = append(args, "%"+value+"%")
+			switch op.Op {
+			case "eq":
+				query += " AND name = ?"
+				args = append(args, op.Val)
+			case "ne":
+				query += " AND name != ?"
+				args = append(args, op.Val)
+			case "like":
+				query += " AND name LIKE ?"
+				args = append(args, "%"+op.Val+"%")
+			}
 		case "address":
-			query += " AND address LIKE ?"
-			args = append(args, "%"+value+"%")
+			switch op.Op {
+			case "eq":
+				query += " AND address = ?"
+				args = append(args, op.Val)
+			case "ne":
+				query += " AND address != ?"
+				args = append(args, op.Val)
+			case "like":
+				query += " AND address LIKE ?"
+				args = append(args, "%"+op.Val+"%")
+			}
 		}
 	}
 
@@ -256,4 +292,30 @@ func (r *SQLiteRepo) Delete(ctx context.Context, id uint) error {
 // Close 关闭数据库连接
 func (r *SQLiteRepo) Close() error {
 	return r.db.Close()
+}
+
+// GetAllKinds 返回所有去重的target类型
+func (r *SQLiteRepo) GetAllKinds() ([]string, error) {
+	query := "SELECT DISTINCT kind FROM targets ORDER BY kind"
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all kinds: %w", err)
+	}
+	defer rows.Close()
+
+	var kinds []string
+	for rows.Next() {
+		var kind string
+		err := rows.Scan(&kind)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan kind: %w", err)
+		}
+		kinds = append(kinds, kind)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error occurred while iterating rows: %w", err)
+	}
+
+	return kinds, nil
 }

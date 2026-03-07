@@ -115,12 +115,18 @@ var targetListCmd = &cobra.Command{
 		kindFilter, _ := cmd.Flags().GetString("kind")
 		tagFilter, _ := cmd.Flags().GetString("tag")
 
-		filters := make(map[string]string)
+		filters := make(map[string]targets.Op)
 		if kindFilter != "" {
-			filters["kind"] = kindFilter
+			filters["kind"] = targets.Op{
+				Op:  "eq",
+				Val: kindFilter,
+			}
 		}
 		if tagFilter != "" {
-			filters["tag"] = tagFilter
+			filters["tag"] = targets.Op{
+				Op:  "like",
+				Val: tagFilter,
+			}
 		}
 
 		// 确保配置目录存在

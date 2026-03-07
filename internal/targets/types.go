@@ -2,6 +2,12 @@ package targets
 
 import "context"
 
+// Op represents an operation for filtering
+type Op struct {
+	Op  string // operation type: eq, like, ne, gt, lt, etc.
+	Val string // value to compare against
+}
+
 // Target 表示一个目标资产
 type Target struct {
 	ID          uint   `json:"id" yaml:"id"`
@@ -22,8 +28,9 @@ type Repo interface {
 	Create(ctx context.Context, target *Target) error
 	GetByID(ctx context.Context, id uint) (*Target, error)
 	GetByName(ctx context.Context, name string) (*Target, error)
-	List(ctx context.Context, filters map[string]string) ([]*Target, error)
+	List(ctx context.Context, filters map[string]Op) ([]*Target, error)
 	Update(ctx context.Context, target *Target) error
 	Delete(ctx context.Context, id uint) error
+	GetAllKinds() ([]string, error)
 	Close() error
 }
