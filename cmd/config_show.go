@@ -31,9 +31,14 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 		fmt.Println("  API Key: (未设置)")
 	}
 	fmt.Printf("  Base URL: %s\n", cfg.LLM.BaseURL)
-	fmt.Printf("  Provider: %s\n", cfg.LLM.Provider)
+	fmt.Printf("  Protocol: %s\n", cfg.LLM.Protocol)
 	fmt.Printf("  Model Name: %s\n", cfg.LLM.ModelName)
-
+	if cfg.DataDir != "" {
+		fmt.Printf("Data Dir: %s\n", cfg.DataDir)
+	}
+	if cfg.PlaybooksDir != "" {
+		fmt.Printf("Playbooks Dir: %s\n", cfg.PlaybooksDir)
+	}
 	return nil
 }
 

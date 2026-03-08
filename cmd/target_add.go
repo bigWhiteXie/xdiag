@@ -3,12 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"xdiag/internal/app/targets"
+	"xdiag/internal/config"
 )
 
 func newTargetAddCmd() *cobra.Command {
@@ -26,7 +26,6 @@ xdiag target add --name prod-db --kind postgres --address db.example.com --port 
 		RunE: runTargetAdd,
 	}
 
-	cmd.Flags().String("name", "", "目标名称 (必需)")
 	cmd.Flags().String("kind", "", "目标类型 (node/postgres/mysql/redis) (必需)")
 	cmd.Flags().String("address", "", "目标地址 (必需)")
 	cmd.Flags().Int("port", 0, "目标端口")
@@ -43,7 +42,6 @@ xdiag target add --name prod-db --kind postgres --address db.example.com --port 
 }
 
 func runTargetAdd(cmd *cobra.Command, args []string) error {
-	name, _ := cmd.Flags().GetString("name")
 	kind, _ := cmd.Flags().GetString("kind")
 	address, _ := cmd.Flags().GetString("address")
 	port, _ := cmd.Flags().GetInt("port")
@@ -51,10 +49,11 @@ func runTargetAdd(cmd *cobra.Command, args []string) error {
 	password, _ := cmd.Flags().GetString("password")
 	tags, _ := cmd.Flags().GetString("tags")
 
-	if name == "" || kind == "" || address == "" {
-		return fmt.Errorf("--name, --kind, and --address are required")
+	if kind == "" || address == "" {
+		return fmt.Errorf("--kind, and --address are required")
 	}
 
+	name := fmt.Sprintf("%s-%s:%d", kind, address, port)
 	target := &targets.Target{
 		Name:     name,
 		Kind:     kind,
@@ -80,12 +79,9 @@ func runTargetAdd(cmd *cobra.Command, args []string) error {
 }
 
 func initTargetRepo() (*targets.SQLiteRepo, func(), error) {
-	configDir := filepath.Join(os.Getenv("HOME"), ".xdiag")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
+	conf, _ := config.LoadConfig()
 
-	dbPath := filepath.Join(configDir, "targets.db")
+	dbPath := filepath.Join(conf.DataDir, "targets.db")
 	repo, err := targets.NewSQLiteRepo(dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize repository: %w", err)

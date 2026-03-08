@@ -234,7 +234,7 @@ func TestRouteTargetAgent_WithRealLLM(t *testing.T) {
 		APIKey:    "b6ddebfe0af182f2a015e81448b09d71.thjX2dtaj8XvAJ8d",
 		BaseURL:   "http://localhost:1234/v1",
 		ModelName: "glm-4.7-flash",
-		Provider:  "openai", // 使用 custom provider 兼容 OpenAI API
+		Protocol:  "openai", // 使用 custom provider 兼容 OpenAI API
 	}
 
 	model, err := llm.NewClient(ctx, llmConfig)

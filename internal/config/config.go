@@ -15,6 +15,17 @@ const (
 	xdiagDirEnv = "XDIAG_DIR"
 )
 
+var (
+	keyMap = map[string]string{
+		"api_key":    "llm.api_key",
+		"base_url":   "llm.base_url",
+		"protocol":   "llm.protocol",
+		"model_name": "llm.model_name",
+		"data_dir":   "data_dir",
+		"book_dir":   "playbooks_dir",
+	}
+)
+
 // Config 应用程序配置
 type Config struct {
 	LLM          llm.ClientConfig `mapstructure:"llm"`
@@ -31,11 +42,9 @@ type LLMConfig struct {
 	MaxRetries int    `mapstructure:"max_retries"`
 }
 
-// NewConfig 创建新的配置实例
+// NewConfig 创建配置文件创建实例
 func NewConfig() *Config {
 	configDir := GetConfigDir()
-	// 展开环境变量
-	configDir = os.ExpandEnv(configDir)
 
 	// 确保配置目录存在
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -67,7 +76,7 @@ func NewConfig() *Config {
 			APIKey:     viper.GetString("llm.api_key"),
 			BaseURL:    viper.GetString("llm.base_url"),
 			ModelName:  viper.GetString("llm.model_name"),
-			Provider:   viper.GetString("llm.provider"),
+			Protocol:   viper.GetString("llm.protocol"),
 			MaxRetries: viper.GetInt("llm.max_retries"),
 		},
 		PlaybooksDir: playbooksDir,
@@ -96,7 +105,10 @@ func GetConfigDir() string {
 	if configDir == "" {
 		configDir = "."
 	}
-	return filepath.Join(configDir, ".xdiag")
+	configDir = filepath.Join(configDir, ".xdiag")
+
+	// 展开环境变量
+	return os.ExpandEnv(configDir)
 }
 
 // GetConfigPath 获取配置文件路径
@@ -134,14 +146,6 @@ func SaveModelConfig(apiKey, baseURL, protocol, modelName string) error {
 
 // SetConfigValue 设置单个配置项
 func SetConfigValue(key, value string) error {
-	// 映射简写键名到完整路径
-	keyMap := map[string]string{
-		"api_key":    "llm.api_key",
-		"base_url":   "llm.base_url",
-		"provider":   "llm.provider",
-		"model_name": "llm.model_name",
-	}
-
 	fullKey, ok := keyMap[key]
 	if !ok {
 		return fmt.Errorf("未知配置项：%s", key)
@@ -162,8 +166,11 @@ func SetConfigValue(key, value string) error {
 			// 设置默认值
 			viper.Set("llm.api_key", "")
 			viper.Set("llm.base_url", "https://api.openai.com/v1")
-			viper.Set("llm.provider", "openai")
+			viper.Set("llm.protocol", "openai")
 			viper.Set("llm.model_name", "")
+			viper.Set("data_dir", "/root/.xdiag/data")
+			viper.Set("playbooks_dir", "/root/.xdiag/playbooks")
+
 		} else {
 			return fmt.Errorf("读取配置失败：%v", err)
 		}
@@ -182,14 +189,6 @@ func SetConfigValue(key, value string) error {
 
 // UnsetConfigValue 删除配置项
 func UnsetConfigValue(key string) error {
-	// 映射简写键名到完整路径
-	keyMap := map[string]string{
-		"api_key":    "llm.api_key",
-		"base_url":   "llm.base_url",
-		"protocol":   "llm.protocol",
-		"model_name": "llm.model_name",
-	}
-
 	fullKey, ok := keyMap[key]
 	if !ok {
 		return fmt.Errorf("未知配置项：%s", key)

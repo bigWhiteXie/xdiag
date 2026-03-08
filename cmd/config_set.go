@@ -16,6 +16,12 @@ func newConfigSetCmd() *cobra.Command {
 		Example: `
 xdiag config set model_name gpt-4-turbo
 xdiag config set base_url https://api.anthropic.com
+xdiag config set api_key xxxxx
+xdiag config set provider openai
+xdiag config set data_dir /root/.xdiag/data
+xdiag config set book_path /root/.xdiag/playbooks
+
+
 `,
 		Args: cobra.ExactArgs(2),
 		RunE: runConfigSet,

@@ -26,19 +26,19 @@ type ClientConfig struct {
 	APIKey     string `mapstructure:"api_key"`
 	BaseURL    string `mapstructure:"base_url"`
 	ModelName  string `mapstructure:"model_name"`
-	Provider   string `mapstructure:"provider"`
+	Protocol   string `mapstructure:"protocol"`
 	MaxRetries int    `mapstructure:"max_retries"`
 }
 
 // NewClient 根据配置创建相应的大模型客户端
 func NewClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChatModel, error) {
-	switch ModelProvider(config.Provider) {
+	switch ModelProvider(config.Protocol) {
 	case OpenAIProvider, SiliconFlowProvider, CustomProvider:
 		return createOpenAIClient(ctx, config)
 	case AnthropicProvider:
 		return createAnthropicClient(ctx, config)
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", config.Provider)
+		return nil, fmt.Errorf("unsupported provider: %s", config.Protocol)
 	}
 }
 

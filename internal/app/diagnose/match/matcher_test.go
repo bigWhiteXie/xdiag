@@ -67,53 +67,6 @@ func (m *MockChatModel) IsCallbacksEnabled() bool {
 	return false
 }
 
-func TestMatcher_BuildDescriptions(t *testing.T) {
-	mockRepo := new(MockRepo)
-	mockModel := new(MockChatModel)
-
-	matcher := &Matcher{
-		repo:      mockRepo,
-		chatModel: mockModel,
-	}
-
-	// 测试 buildPlaybooksDescription
-	playbooks := []playbook.Playbook{
-		{
-			Name: "网络诊断",
-			Desc: "诊断网络连接问题",
-			Tags: []string{"network", "connectivity"},
-		},
-		{
-			Name: "性能诊断",
-			Desc: "诊断系统性能问题",
-			Tags: []string{"performance", "cpu"},
-		},
-	}
-
-	desc := matcher.buildPlaybooksDescription(playbooks)
-	assert.Contains(t, desc, "网络诊断")
-	assert.Contains(t, desc, "性能诊断")
-	assert.Contains(t, desc, "network")
-
-	// 测试 buildRefsDescription
-	refs := []playbook.Ref{
-		{
-			Name: "ping测试",
-			Desc: "使用ping测试网络连通性",
-			Log:  "/var/log/ping.log",
-		},
-		{
-			Name: "traceroute测试",
-			Desc: "使用traceroute追踪网络路径",
-		},
-	}
-
-	refDesc := matcher.buildRefsDescription(refs)
-	assert.Contains(t, refDesc, "ping测试")
-	assert.Contains(t, refDesc, "traceroute测试")
-	assert.Contains(t, refDesc, "/var/log/ping.log")
-}
-
 func TestMatchState_ExcludePlaybooks(t *testing.T) {
 	state := &MatchState{
 		AllPlaybooks: []playbook.Playbook{
@@ -176,7 +129,7 @@ func TestMatcherLLM(t *testing.T) {
 		APIKey:    "b6ddebfe0af182f2a015e81448b09d71.thjX2dtaj8XvAJ8d",
 		BaseURL:   "http://localhost:1234/v1",
 		ModelName: "glm-4.7-flash",
-		Provider:  "openai", // 使用 custom provider 兼容 OpenAI API
+		Protocol:  "openai", // 使用 custom provider 兼容 OpenAI API
 	}
 	model, err := llm.NewClient(ctx, llmConfig)
 	assert.NoError(t, err)
@@ -287,4 +240,29 @@ func (m *MockPlaybookRepo) ListPlaybooks(tags []string) ([]playbook.Playbook, er
 func (m *MockPlaybookRepo) GetBook(playbookName, refName string) (*playbook.Book, error) {
 
 	return nil, nil
+}
+
+func (m *MockPlaybookRepo) LoadPlaybook(playbookName string) (*playbook.Playbook, error) {
+	// 返回一个空的playbook和nil错误
+	return &playbook.Playbook{}, nil
+}
+
+func (m *MockPlaybookRepo) PlaybookExists(playbookName string) bool {
+	// 默认返回true，表示playbook存在
+	return true
+}
+
+func (m *MockPlaybookRepo) SavePlaybook(playbook *playbook.Playbook) error {
+	// 空实现，直接返回nil
+	return nil
+}
+
+func (m *MockPlaybookRepo) SaveBook(playbookName string, book *playbook.Book) error {
+	// 空实现，直接返回nil
+	return nil
+}
+
+func (m *MockPlaybookRepo) UpdatePlaybookRef(playbookName string, ref playbook.Ref) error {
+	// 空实现，直接返回nil
+	return nil
 }

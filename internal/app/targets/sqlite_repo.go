@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SQLiteRepo 是使用 SQLite 的目标资产管理存储实现
@@ -37,8 +38,12 @@ func (r *SQLiteRepo) Create(ctx context.Context, target *Target) error {
 	target.CreatedAt = now
 	target.UpdatedAt = now
 
-	if err := r.db.WithContext(ctx).Create(target).Error; err != nil {
-		return fmt.Errorf("failed to create target: %w", err)
+	// 使用 OnConflict 在唯一索引冲突时更新记录
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}}, // 根据 name 列判断冲突
+		DoUpdates: clause.AssignmentColumns([]string{"kind", "address", "port", "username", "password", "ssh_key", "tags", "updated_at"}),
+	}).Create(target).Error; err != nil {
+		return fmt.Errorf("failed to create/update target: %w", err)
 	}
 
 	return nil

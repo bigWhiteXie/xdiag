@@ -34,6 +34,15 @@ type ConnectivityResult struct {
 	ExtraDetails map[string]string `json:"extra_details,omitempty"` // 额外的详细信息
 }
 
+func TestConnectivity(ctx context.Context, target *Target) (*ConnectivityResult, error) {
+	tester, err := NewConnectivityTester(target.Kind)
+	if err != nil {
+		return nil, err
+	}
+
+	return tester.Test(ctx, target)
+}
+
 // NewConnectivityTester 创建指定类型的连通性测试器
 func NewConnectivityTester(targetKind string) (ConnectivityTester, error) {
 	switch targetKind {

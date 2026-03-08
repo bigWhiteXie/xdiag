@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"os"
-	"path/filepath"
+	"xdiag/internal/config"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -26,12 +26,7 @@ func init() {
 }
 
 func initConfig() {
-	configDir := viper.GetString("config_dir")
-	if configDir == "" {
-		configDir = "$HOME/.xdiag"
-	}
-
-	configDir = os.ExpandEnv(configDir)
+	configDir := config.GetConfigDir()
 
 	viper.AddConfigPath(configDir)
 	viper.SetConfigType("yaml")
@@ -44,17 +39,4 @@ func initConfig() {
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		// 仅记录错误，不中断程序
 	}
-
-	playbooksDir := filepath.Join(configDir, "playbooks")
-	if err := os.MkdirAll(playbooksDir, 0755); err != nil {
-		// 仅记录错误，不中断程序
-	}
-
-	dataDir := filepath.Join(configDir, "data")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		// 仅记录错误，不中断程序
-	}
-
-	viper.Set("playbooks_dir", playbooksDir)
-	viper.Set("data_dir", dataDir)
 }

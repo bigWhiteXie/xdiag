@@ -68,18 +68,21 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	target, err := targetRepo.GetByID(ctx, targetID)
+	Diagtarget, err := targetRepo.GetByID(ctx, targetID)
 	if err != nil {
 		return fmt.Errorf("获取目标具体信息失败: %w", err)
 	}
-	fmt.Printf("✅ 找到目标, ip:%s port:%d kind:%s tags:%s\n", target.Address, target.Port, target.Kind, target.Tags)
-
+	fmt.Printf("✅ 找到目标, ip:%s port:%d kind:%s tags:%s\n", Diagtarget.Address, Diagtarget.Port, Diagtarget.Kind, Diagtarget.Tags)
+	_, err = targets.TestConnectivity(ctx, Diagtarget)
+	if err != nil {
+		return fmt.Errorf("测试目标连通性失败: %w", err)
+	}
 	// ========================匹配方案========================
 	matcher, err := match.NewMatcher(svc.GetServiceContext().BookRepo, svc.GetServiceContext().Model)
 	if err != nil {
 		return fmt.Errorf("创建匹配器失败: %w", err)
 	}
-	matchResult, err := matcher.Match(ctx, target, userDescription)
+	matchResult, err := matcher.Match(ctx, Diagtarget, userDescription)
 	if err != nil {
 		return fmt.Errorf("匹配失败: %w", err)
 	}
@@ -98,7 +101,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("获取诊断方案失败:%s", err)
 	}
-	evtChan, err := executor.Execute(ctx, book, target, userDescription)
+	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription)
 	if err != nil {
 		return fmt.Errorf("执行诊断失败: %w", err)
 	}

@@ -1,15 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
 	"xdiag/internal/app/playbook"
+	"xdiag/internal/config"
+	"xdiag/internal/llm"
 )
 
 var playbookCmd = &cobra.Command{
@@ -22,7 +23,7 @@ func init() {
 	rootCmd.AddCommand(playbookCmd)
 	playbookCmd.AddCommand(newListPlaybookCmd())
 	playbookCmd.AddCommand(newShowPlaybookCmd())
-	playbookCmd.AddCommand(newUpdatePlaybookCmd())
+	playbookCmd.AddCommand(newGenerateBookCmd())
 }
 
 func newListPlaybookCmd() *cobra.Command {
@@ -35,12 +36,12 @@ func newListPlaybookCmd() *cobra.Command {
 }
 
 func runListPlaybook(cmd *cobra.Command, args []string) error {
-	playbooksDir := viper.GetString("playbooks_dir")
-	if playbooksDir == "" {
-		return fmt.Errorf("无法获取playbooks目录")
+	conf, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	repo := playbook.NewRepo(playbooksDir)
+	repo := playbook.NewRepo(conf.PlaybooksDir)
 	playbooks, err := repo.ListPlaybooks(nil)
 	if err != nil {
 		return fmt.Errorf("加载Playbook列表时出错: %w", err)
@@ -72,12 +73,13 @@ func newShowPlaybookCmd() *cobra.Command {
 
 func runShowPlaybook(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	playbooksDir := viper.GetString("playbooks_dir")
-	if playbooksDir == "" {
-		return fmt.Errorf("无法获取playbooks目录")
+
+	conf, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	repo := playbook.NewRepo(playbooksDir)
+	repo := playbook.NewRepo(conf.PlaybooksDir)
 	playbooks, err := repo.ListPlaybooks(nil)
 	if err != nil {
 		return fmt.Errorf("加载Playbook '%s' 时出错: %w", name, err)
@@ -114,54 +116,65 @@ func runShowPlaybook(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func newUpdatePlaybookCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "update",
-		Short: "从GitHub更新Playbook",
-		Long:  "从GitHub仓库下载最新的Playbook定义文件",
-		RunE:  runUpdatePlaybook,
+func newGenerateBookCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "generate",
+		Short: "生成新的诊断方案",
+		Long:  "根据描述生成新的诊断方案(Book)，需要指定playbook名称和方案描述",
+		RunE:  runGenerateBook,
 	}
+
+	cmd.Flags().String("playbook", "", "playbook名称(必填)")
+	cmd.Flags().String("desc", "", "诊断方案描述(必填)")
+
+	// 设置为必填参数
+	_ = cmd.MarkFlagRequired("playbook")
+	_ = cmd.MarkFlagRequired("desc")
+
+	return cmd
 }
 
-func runUpdatePlaybook(cmd *cobra.Command, args []string) error {
-	fmt.Println("正在从GitHub拉取最新的诊断方案...")
-
-	playbooksDir := viper.GetString("playbooks_dir")
-	if playbooksDir == "" {
-		return fmt.Errorf("无法获取playbooks目录")
+func runGenerateBook(cmd *cobra.Command, args []string) error {
+	playbookName, err := cmd.Flags().GetString("playbook")
+	if err != nil {
+		return fmt.Errorf("获取playbook名称失败: %w", err)
 	}
 
-	gitDir := filepath.Join(playbooksDir, ".git")
-	if _, err := os.Stat(gitDir); err == nil {
-		fmt.Println("检测到现有git仓库，正在更新...")
-		gitCmd := exec.Command("git", "pull")
-		gitCmd.Dir = playbooksDir
-		output, err := gitCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("更新失败: %w\n输出: %s", err, output)
-		}
-		fmt.Println("Playbook更新成功!")
-		fmt.Printf("输出: %s\n", output)
-	} else {
-		repoURL := "https://github.com/example/xdiag-playbooks.git"
-		if repoURL != "" {
-			fmt.Printf("正在克隆仓库到: %s\n", playbooksDir)
-
-			if _, err := exec.LookPath("git"); err != nil {
-				return fmt.Errorf("系统中未找到git命令，请先安装git")
-			}
-
-			gitCmd := exec.Command("git", "clone", repoURL, playbooksDir)
-			output, err := gitCmd.CombinedOutput()
-			if err != nil {
-				fmt.Printf("克隆失败: %v\n输出: %s\n", err, output)
-				fmt.Println("使用示例仓库URL进行演示，实际部署时请替换为真实仓库")
-			} else {
-				fmt.Println("Playbook克隆成功!")
-			}
-		}
+	description, err := cmd.Flags().GetString("desc")
+	if err != nil {
+		return fmt.Errorf("获取方案描述失败: %w", err)
 	}
 
-	fmt.Println("Playbook更新完成")
+	conf, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
+	}
+
+	llmClient, err := llm.NewClient(context.Background(), &conf.LLM)
+	if err != nil {
+		return fmt.Errorf("创建LLM客户端失败: %w", err)
+	}
+
+	// 创建Generator实例
+	generator := playbook.NewGenerator(llmClient, conf.PlaybooksDir)
+
+	// 准备请求参数
+	req := playbook.GenerateBookRequest{
+		PlaybookName: playbookName,
+		Description:  description,
+	}
+
+	// 生成并保存诊断方案
+	genbook, err := generator.GenerateAndSave(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("生成诊断方案失败: %w", err)
+	}
+
+	fmt.Printf("诊断方案已成功生成到Playbook '%s'\n", playbookName)
+
+	// 加载并显示生成的内容
+	bytes, _ := json.Marshal(genbook)
+	fmt.Println(bytes)
+
 	return nil
 }

@@ -19,10 +19,7 @@ func (n *NodeConnectivityTester) Test(ctx context.Context, target *Target) (*Con
 	// 首先进行 ping 测试
 	pingResult, pingErr := n.pingTest(target.Address)
 	if pingErr != nil {
-		result.Status = StatusFailed
-		result.PingStatus = StatusFailed
-		result.Message = fmt.Sprintf(MessagePingFailed, pingErr)
-		return result, nil
+		return result, fmt.Errorf(MessagePingFailed, pingErr)
 	}
 
 	result.PingStatus = StatusSuccess
@@ -31,10 +28,7 @@ func (n *NodeConnectivityTester) Test(ctx context.Context, target *Target) (*Con
 	// 进行 SSH 认证测试
 	authResult, authErr := n.sshTest(target)
 	if authErr != nil {
-		result.Status = StatusFailed
-		result.AuthStatus = StatusFailed
-		result.Message = fmt.Sprintf(MessageAuthFailed, TargetKindNode, authErr)
-		return result, nil
+		return result, fmt.Errorf(MessageAuthFailed, TargetKindNode, authErr)
 	}
 
 	result.AuthStatus = StatusSuccess
@@ -82,10 +76,7 @@ func (p *PostgresConnectivityTester) Test(ctx context.Context, target *Target) (
 	// 首先进行 ping 测试
 	pingResult, pingErr := p.pingTest(target.Address, target.Port)
 	if pingErr != nil {
-		result.Status = StatusFailed
-		result.PingStatus = StatusFailed
-		result.Message = fmt.Sprintf(MessagePingFailed, pingErr)
-		return result, nil
+		return result, fmt.Errorf(MessagePingFailed, pingErr)
 	}
 
 	result.PingStatus = StatusSuccess
@@ -94,10 +85,7 @@ func (p *PostgresConnectivityTester) Test(ctx context.Context, target *Target) (
 	// 进行 PostgreSQL 认证测试
 	authResult, authErr := p.authTest(target)
 	if authErr != nil {
-		result.Status = StatusFailed
-		result.AuthStatus = StatusFailed
-		result.Message = fmt.Sprintf(MessageAuthFailed, TargetKindPostgres, authErr)
-		return result, nil
+		return result, fmt.Errorf(MessageAuthFailed, TargetKindPostgres, authErr)
 	}
 
 	result.AuthStatus = StatusSuccess
