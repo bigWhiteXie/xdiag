@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xdiag/internal/app/targets"
-	"xdiag/internal/llm"
-	"xdiag/internal/svc"
-	innertool "xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/internal/svc"
+	innertool "github.com/bigWhiteXie/xdiag/internal/tool"
 
 	"github.com/stretchr/testify/assert"
 )

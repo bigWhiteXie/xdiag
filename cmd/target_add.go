@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/app/targets"
-	"xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/config"
 )
 
 func newTargetAddCmd() *cobra.Command {

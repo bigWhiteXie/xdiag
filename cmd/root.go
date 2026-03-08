@@ -2,7 +2,8 @@ package cmd
 
 import (
 	"os"
-	"xdiag/internal/config"
+
+	"github.com/bigWhiteXie/xdiag/internal/config"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

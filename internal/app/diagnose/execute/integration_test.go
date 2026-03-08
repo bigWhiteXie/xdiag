@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xdiag/internal/app/diagnose/execute"
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/internal/llm"
-	"xdiag/internal/svc"
+	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/execute"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/internal/svc"
 
 	"github.com/stretchr/testify/assert"
 )

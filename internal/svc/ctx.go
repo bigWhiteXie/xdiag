@@ -1,9 +1,9 @@
 package svc
 
 import (
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/config"
 
 	"github.com/cloudwego/eino/components/model"
 )

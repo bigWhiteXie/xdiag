@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/config"
 )
 
 func newConfigSetCmd() *cobra.Command {
@@ -18,8 +18,8 @@ xdiag config set model_name gpt-4-turbo
 xdiag config set base_url https://api.anthropic.com
 xdiag config set api_key xxxxx
 xdiag config set provider openai
-xdiag config set data_dir /root/.xdiag/data
-xdiag config set book_path /root/.xdiag/playbooks
+xdiag config set data_dir /root/.github.com/bigWhiteXie/xdiag/data
+xdiag config set book_path /root/.github.com/bigWhiteXie/xdiag/playbooks
 
 
 `,

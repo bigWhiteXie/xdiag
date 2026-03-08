@@ -3,17 +3,18 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"path"
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/app/diagnose/execute"
-	"xdiag/internal/app/diagnose/match"
-	"xdiag/internal/app/diagnose/route"
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/internal/config"
-	"xdiag/internal/llm"
-	"xdiag/internal/svc"
+	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/execute"
+	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/match"
+	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/route"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/internal/svc"
 )
 
 var diagnoseCmd = &cobra.Command{
@@ -39,7 +40,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 	// 构建repo和model对象
-	targetRepo, err := targets.NewSQLiteRepo(config.DataDir)
+	targetRepo, err := targets.NewSQLiteRepo(path.Join(config.DataDir, "targets.db"))
 	if err != nil {
 		return fmt.Errorf("创建sqlite repo失败: %w", err)
 	}

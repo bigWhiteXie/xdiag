@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-	"xdiag/pkg/utils"
+
+	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -32,6 +33,7 @@ func NewGenerator(llmClient model.ToolCallingChatModel, playbooksDir string) *Ge
 
 // GenerateBookRequest 生成book的请求参数
 type GenerateBookRequest struct {
+	Name         string
 	PlaybookName string // playbook名称(大类)
 	Description  string // 用户对诊断步骤的描述
 }
@@ -79,9 +81,10 @@ func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest
 	if lastErr != nil {
 		return nil, fmt.Errorf("AI生成失败，已重试%d次: %w", g.maxRetries, lastErr)
 	}
-
+	content.Book.Name = req.Name
+	content.Ref.Name = req.Name
 	// 保存到磁盘
-	return &content.Book, g.saveContent(req.PlaybookName, content, existingPlaybook)
+	return &content.Book, g.saveContent(req, content, existingPlaybook)
 }
 
 // buildPrompt 构建AI提示词
@@ -98,11 +101,10 @@ func (g *Generator) buildPrompt(req GenerateBookRequest, playbookExists bool, _ 
 <output>
 {
   "book": {
-    "name": "诊断方案名称",
     "steps": [
       {
         "kind": "步骤类型",
-        "desc": "步骤描述",
+        "desc": "步骤描述，需要包含具体操作(如shell命令、工具调用等等)不能只有语言描述",
         "cases": [
           {
             "case": "条件描述",
@@ -121,7 +123,7 @@ func (g *Generator) buildPrompt(req GenerateBookRequest, playbookExists bool, _ 
 
 # 注意:
 1. book.name 和 ref.name 必须相同
-2. 步骤要具体到执行命令、可执行
+2. 每个步骤都要具体到执行命令，不能只有语言描述
 3. kind字段当前仅支持: seq, branch
 4. cases字段是可选的，只在有条件分支时使用
 `, req.Description)
@@ -137,7 +139,8 @@ Playbook名称: %s
 1. 为这个诊断大类生成合适的描述和标签
 2. 生成对应的诊断方案(book)和引用(ref)
 
-请以JSON格式返回，结构如下:
+请按如下格式进行返回:
+<output>
 {
   "playbook": {
     "name": "%s",
@@ -145,7 +148,6 @@ Playbook名称: %s
     "required_tags": ["tag1", "tag2"]
   },
   "book": {
-    "name": "诊断方案名称",
     "steps": [
       {
         "kind": "步骤类型",
@@ -164,9 +166,10 @@ Playbook名称: %s
     "log": "相关日志路径或说明，若用户未描述方案相关日志则不写"
   }
 }
+</output>
 
-注意:
-1. playbook.name必须是"%s"
+# 注意:
+1. playbook.name必须是"%s",并且playbook.Desc是一个大的诊断方向，应该根据它的名称进行联想而不是当前方案的描述
 2. book.name 和 ref.name 必须相同
 3. 步骤要具体、可执行
 4. kind字段当前仅支持: seq, branch
@@ -203,9 +206,7 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 }
 
 // saveContent 保存生成的内容到磁盘
-func (g *Generator) saveContent(playbookName string, content *GeneratedContent, playbook *Playbook) error {
-	content.Ref.Name = content.Book.Name
-
+func (g *Generator) saveContent(req GenerateBookRequest, content *GeneratedContent, playbook *Playbook) error {
 	// 如果playbook不存在，创建目录和introduction.yaml
 	if playbook == nil {
 		if content.Playbook == nil || content.Playbook.Name == "" || content.Playbook.Desc == "" {
@@ -219,10 +220,10 @@ func (g *Generator) saveContent(playbookName string, content *GeneratedContent, 
 	}
 
 	// 保存book文件
-	if err := g.repo.SaveBook(playbookName, &content.Book); err != nil {
+	if err := g.repo.SaveBook(req.PlaybookName, &content.Book); err != nil {
 		return err
 	}
 
 	// 更新introduction.yaml中的refs列表
-	return g.repo.UpdatePlaybookRef(playbookName, content.Ref)
+	return g.repo.UpdatePlaybookRef(req.PlaybookName, content.Ref)
 }

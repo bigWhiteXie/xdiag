@@ -7,8 +7,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/config"
-	"xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/llm"
 )
 
 func newConfigTestLLMCmd() *cobra.Command {

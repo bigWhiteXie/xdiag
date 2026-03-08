@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

@@ -1,4 +1,4 @@
-module xdiag
+module github.com/bigWhiteXie/xdiag
 
 go 1.25.7
 

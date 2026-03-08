@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/config"
 )
 
 func newConfigModelCmd() *cobra.Command {
@@ -62,6 +62,6 @@ func runConfigModel(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Println("✅ 配置已保存到 ~/.xdiag/config.yaml")
+	fmt.Println("✅ 配置已保存到 ~/.github.com/bigWhiteXie/xdiag/config.yaml")
 	return nil
 }

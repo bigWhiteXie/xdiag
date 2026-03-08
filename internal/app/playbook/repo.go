@@ -165,6 +165,10 @@ func (r *repo) SaveBook(playbookName string, book *Book) error {
 
 	// 保存book文件
 	bookPath := filepath.Join(refsDir, fmt.Sprintf("%s.yaml", book.Name))
+	_, err := os.Stat(bookPath)
+	if err == nil {
+		os.Remove(bookPath)
+	}
 	data, err := yaml.Marshal(book)
 	if err != nil {
 		return fmt.Errorf("序列化book失败: %w", err)
