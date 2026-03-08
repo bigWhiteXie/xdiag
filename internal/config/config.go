@@ -33,15 +33,8 @@ type LLMConfig struct {
 
 // NewConfig 创建新的配置实例
 func NewConfig() *Config {
-	configDir := viper.GetString("config_dir")
-	if configDir == "" {
-		configDir = "$HOME/.xdiag"
-		if envDir := os.Getenv(xdiagDirEnv); envDir != "" {
-			configDir = envDir
-		}
-	}
-
-	// 展开$HOME环境变量
+	configDir := GetConfigDir()
+	// 展开环境变量
 	configDir = os.ExpandEnv(configDir)
 
 	// 确保配置目录存在

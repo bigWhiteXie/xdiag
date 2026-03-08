@@ -159,6 +159,23 @@ func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *tar
 	return eventChan, nil
 }
 
+func (e *Executor) GetReport(ch chan ExecuteEvent, showDetails bool) string {
+	var lastMsg ExecuteEvent
+	for event := range ch {
+		lastMsg = event
+		if event.Type == "complete" {
+			break
+		}
+
+		if showDetails {
+			jsonstr, _ := json.Marshal(event)
+			fmt.Printf("[执行记录]：%s\n", jsonstr)
+		}
+	}
+
+	return lastMsg.Message
+}
+
 // buildGraph 构建执行图
 func (e *Executor) buildGraph() (compose.Runnable[*ExecuteState, *ExecuteState], error) {
 	graph := compose.NewGraph[*ExecuteState, *ExecuteState]()
