@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"xdiag/internal/llm"
+
+	"github.com/bigWhiteXie/xdiag/internal/llm"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -168,8 +169,8 @@ func SetConfigValue(key, value string) error {
 			viper.Set("llm.base_url", "https://api.openai.com/v1")
 			viper.Set("llm.protocol", "openai")
 			viper.Set("llm.model_name", "")
-			viper.Set("data_dir", "/root/.xdiag/data")
-			viper.Set("playbooks_dir", "/root/.xdiag/playbooks")
+			viper.Set("data_dir", "/root/.github.com/bigWhiteXie/xdiag/data")
+			viper.Set("playbooks_dir", "/root/.github.com/bigWhiteXie/xdiag/playbooks")
 
 		} else {
 			return fmt.Errorf("读取配置失败：%v", err)

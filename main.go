@@ -1,6 +1,6 @@
 package main
 
-import "xdiag/cmd"
+import "github.com/bigWhiteXie/xdiag/cmd"
 
 func main() {
 	cmd.Execute()

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/pkg/utils"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"

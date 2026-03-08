@@ -7,12 +7,11 @@ import (
 	"strings"
 	"text/template"
 
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/internal/svc"
-	itool "xdiag/internal/tool"
-
-	"xdiag/pkg/utils"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/svc"
+	itool "github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -515,15 +514,23 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		return state, nil
 	}
 
-	// 验证选择的分支索引
+	// 当所有分支都不满足条件时，跳到下一个步骤即可
 	if result.SelectedCase < 0 || result.SelectedCase >= len(currentStep.Cases) {
-		state.Error = fmt.Sprintf("选择的分支索引无效: %d, 总分支数: %d", result.SelectedCase, len(currentStep.Cases))
-		state.RetryCount++
+		// 步骤完成
+		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
+			Step:   currentStep,
+			Result: result,
+		})
+		currentContext.CurrentIndex++
+		state.RetryCount = 0
+		state.Error = ""
+		state.CurrentContext = ""
+
 		if state.EventChan != nil {
 			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
+				Type:   "step_complete",
+				Step:   &currentStep,
+				Result: &result,
 			}
 		}
 		return state, nil
@@ -635,7 +642,7 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 		return "", fmt.Errorf("target 不能为 nil")
 	}
 
-	tmpl := `你是一个专业的系统诊断专家。请根据以下信息选择合适的诊断分支。
+	tmpl := `你是一个专业的系统诊断专家。请根据以下信息选择合适的诊断分支。若没有分支符合条件，则将selected_case设置为-1
 
 ## 当前环境
 {{with .Target}}
@@ -668,7 +675,7 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 <output>
 {
   "status": 1,
-  "selected_case": 分支索引(从0开始),
+  "selected_case": 分支索引(从0开始，若没有符合条件的分支则设置成-1),
   "result": "选择该分支的理由"
 }
 </output>`

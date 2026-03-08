@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 )
 
 func newTargetTestConnCmd() *cobra.Command {

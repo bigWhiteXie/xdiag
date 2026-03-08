@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"xdiag/internal/app/playbook"
-	"xdiag/internal/app/targets"
-	"xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/llm"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"

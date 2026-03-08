@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"xdiag/internal/svc"
-	innertool "xdiag/internal/tool"
-	"xdiag/pkg/utils"
+
+	"github.com/bigWhiteXie/xdiag/internal/svc"
+	innertool "github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"

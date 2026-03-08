@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"

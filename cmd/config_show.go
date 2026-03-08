@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/config"
 )
 
 func newConfigShowCmd() *cobra.Command {
