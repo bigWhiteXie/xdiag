@@ -81,6 +81,7 @@ type Executor struct {
 
 // NewExecutor 创建新的执行器
 func NewExecutor(ctx context.Context) (*Executor, error) {
+	targetRepo := svc.GetServiceContext().TargetsRepo
 	// 创建 ReAct Agent
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "诊断执行器",
@@ -89,7 +90,7 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 		Model:       svc.GetServiceContext().Model,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{itool.NewExecTool(svc.GetServiceContext().TargetsRepo)}, // TODO: 添加需要的工具
+				Tools: []tool.BaseTool{itool.NewExecTool(targetRepo), itool.NewCopyTool(targetRepo)}, // TODO: 添加需要的工具
 			},
 		},
 	})
