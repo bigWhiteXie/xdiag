@@ -102,7 +102,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("获取诊断方案失败:%s", err)
 	}
-	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription)
+	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription, showDetails)
 	if err != nil {
 		return fmt.Errorf("执行诊断失败: %w", err)
 	}

@@ -81,7 +81,7 @@ func TestExecutorWithMockData(t *testing.T) {
 	}
 
 	// 执行诊断
-	evtChan, err := executor.Execute(ctx, book, target, question)
+	evtChan, err := executor.Execute(ctx, book, target, question, false)
 	if err != nil {
 		t.Fatalf("执行失败: %v", err)
 	}

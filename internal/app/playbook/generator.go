@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	itool "github.com/bigWhiteXie/xdiag/internal/tool"
@@ -207,41 +209,67 @@ func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest
 
 // generatePlaybook 生成playbook信息
 func (g *Generator) generatePlaybook(ctx context.Context, req GenerateBookRequest, showDetails bool) (*GeneratedPlaybook, error) {
-	prompt := fmt.Sprintf(`你是一个诊断专家，需要为一个新的诊断大类生成playbook信息。
+	prompt := fmt.Sprintf(`你是一个诊断专家，需要为一个新的诊断大类生成playbook描述。
 
 用户描述: %s
 Playbook名称: %s
 
-请根据playbook名称生成合适的描述。注意：
-1. name必须是"%s"
-2. desc应该是一个大的诊断方向，根据名称进行联想，而不是当前具体方案的描述
-3. 请立即使用 output_result 工具输出结构化数据
+请根据playbook名称生成一个简短的描述（一句话即可）。注意：
+1. desc应该是一个大的诊断方向，根据名称进行联想，而不是当前具体方案的描述
+2. 直接输出描述文本，不要使用任何标签或格式
 
 示例：
-- 如果playbook名称是"network"，desc应该是"网络相关的诊断方案"
-- 如果playbook名称是"database"，desc应该是"数据库相关的诊断方案"
-`, req.Description, req.PlaybookName, req.PlaybookName)
+- 如果playbook名称是"network"，输出："网络相关的诊断方案"
+- 如果playbook名称是"database"，输出："数据库相关的诊断方案"
+- 如果playbook名称是"performance"，输出："性能相关的诊断方案"
+`, req.Description, req.PlaybookName)
 
-	// 调用AI生成playbook
-	var result *GeneratedPlaybook
+	agentFormatter := formatter.NewAgentFormatter(showDetails)
+	agentFormatter.FormatLLMCall(prompt)
+
+	messages := []*schema.Message{
+		schema.UserMessage(prompt),
+	}
+
+	// 调用AI生成描述（不使用工具）
+	var desc string
 	var lastErr error
 	for attempt := 0; attempt < g.maxRetries; attempt++ {
-		result, lastErr = g.callAIForPlaybook(ctx, prompt, attempt, showDetails)
-		if lastErr == nil {
-			break
+		resp, err := g.llmClient.Generate(ctx, messages)
+		if err != nil {
+			lastErr = fmt.Errorf("AI调用失败: %w", err)
+			if attempt < g.maxRetries-1 {
+				waitTime := g.baseRetryWait * time.Duration(1<<uint(attempt))
+				time.Sleep(waitTime)
+			}
+			continue
 		}
 
-		if attempt < g.maxRetries-1 {
-			waitTime := g.baseRetryWait * time.Duration(1<<uint(attempt))
-			time.Sleep(waitTime)
+		agentFormatter.FormatLLMResponse(resp.Content, false)
+
+		// 过滤掉 <think> 等标签，提取纯文本
+		desc = filterThinkTags(resp.Content)
+		if desc == "" {
+			lastErr = fmt.Errorf("AI返回空描述")
+			if attempt < g.maxRetries-1 {
+				waitTime := g.baseRetryWait * time.Duration(1<<uint(attempt))
+				time.Sleep(waitTime)
+			}
+			continue
 		}
+
+		lastErr = nil
+		break
 	}
 
 	if lastErr != nil {
 		return nil, fmt.Errorf("AI生成playbook失败，已重试%d次: %w", g.maxRetries, lastErr)
 	}
 
-	return result, nil
+	return &GeneratedPlaybook{
+		Name: req.PlaybookName,
+		Desc: desc,
+	}, nil
 }
 
 // generateBookAndRef 生成book和ref信息
@@ -624,4 +652,20 @@ func (g *Generator) callAIForBookAndRef(ctx context.Context, prompt string, atte
 	}
 
 	return nil, fmt.Errorf("超过最大循环次数%d(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
+}
+
+// filterThinkTags 过滤掉 <think> 等标签，提取纯文本内容
+func filterThinkTags(content string) string {
+	// 移除 <think>...</think> 标签及其内容
+	re := regexp.MustCompile(`(?s)<think>.*?</think>`)
+	result := re.ReplaceAllString(content, "")
+
+	// 移除其他可能的 XML 标签
+	re = regexp.MustCompile(`<[^>]+>`)
+	result = re.ReplaceAllString(result, "")
+
+	// 去除首尾空白字符
+	result = strings.TrimSpace(result)
+
+	return result
 }

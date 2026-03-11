@@ -35,6 +35,7 @@ type ExecuteState struct {
 	Error            string
 	StepStack        []StepContext // 步骤栈，用于处理嵌套的分支
 	EventChan        chan<- ExecuteEvent
+	ShowDetails      bool // 是否显示详细信息
 }
 
 // StepContext 步骤上下文，用于处理嵌套分支
@@ -66,7 +67,7 @@ type ExecuteResult struct {
 
 // ExecuteEvent 执行事件
 type ExecuteEvent struct {
-	Type    string // step_start, step_complete, step_error, branch_select, complete
+	Type    string // step_start, step_complete, step_error, branch_select, complete, agent_thinking, agent_tool_call, agent_tool_result
 	Step    *playbook.Step
 	Result  *StepResult
 	Message string
@@ -145,7 +146,7 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 }
 
 // Execute 执行Book
-func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *targets.Target, question string) (chan ExecuteEvent, error) {
+func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *targets.Target, question string, showDetails bool) (chan ExecuteEvent, error) {
 	// 创建事件通道
 	eventChan := make(chan ExecuteEvent, 100)
 
@@ -165,7 +166,8 @@ func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *tar
 				CurrentIndex: 0,
 			},
 		},
-		EventChan: eventChan,
+		EventChan:   eventChan,
+		ShowDetails: showDetails,
 	}
 
 	// 在goroutine中执行graph
@@ -376,6 +378,43 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 			return state, nil
 		}
 
+		// 如果开启详细模式，输出agent的思考和工具调用过程
+		if state.ShowDetails && state.EventChan != nil {
+			if event.Output != nil && event.Output.MessageOutput != nil {
+				msg, err := event.Output.MessageOutput.GetMessage()
+				if err == nil {
+					// 输出思考内容
+					if msg.Role == schema.Assistant && msg.Content != "" {
+						state.EventChan <- ExecuteEvent{
+							Type:    "agent_thinking",
+							Step:    &currentStep,
+							Message: msg.Content,
+						}
+					}
+
+					// 输出工具调用
+					if len(msg.ToolCalls) > 0 {
+						for _, toolCall := range msg.ToolCalls {
+							state.EventChan <- ExecuteEvent{
+								Type:    "agent_tool_call",
+								Step:    &currentStep,
+								Message: fmt.Sprintf("调用工具: %s\n参数: %s", toolCall.Function.Name, toolCall.Function.Arguments),
+							}
+						}
+					}
+
+					// 输出工具执行结果（当 Role 为 Tool 时）
+					if msg.Role == schema.Tool && msg.Content != "" {
+						state.EventChan <- ExecuteEvent{
+							Type:    "agent_tool_result",
+							Step:    &currentStep,
+							Message: fmt.Sprintf("工具结果: %s", msg.Content),
+						}
+					}
+				}
+			}
+		}
+
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			msg, err := event.Output.MessageOutput.GetMessage()
 			if err != nil {
@@ -498,6 +537,43 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 				}
 			}
 			return state, nil
+		}
+
+		// 如果开启详细模式，输出agent的思考和工具调用过程
+		if state.ShowDetails && state.EventChan != nil {
+			if event.Output != nil && event.Output.MessageOutput != nil {
+				msg, err := event.Output.MessageOutput.GetMessage()
+				if err == nil {
+					// 输出思考内容
+					if msg.Role == schema.Assistant && msg.Content != "" {
+						state.EventChan <- ExecuteEvent{
+							Type:    "agent_thinking",
+							Step:    &currentStep,
+							Message: msg.Content,
+						}
+					}
+
+					// 输出工具调用
+					if len(msg.ToolCalls) > 0 {
+						for _, toolCall := range msg.ToolCalls {
+							state.EventChan <- ExecuteEvent{
+								Type:    "agent_tool_call",
+								Step:    &currentStep,
+								Message: fmt.Sprintf("调用工具: %s\n参数: %s", toolCall.Function.Name, toolCall.Function.Arguments),
+							}
+						}
+					}
+
+					// 输出工具执行结果（当 Role 为 Tool 时）
+					if msg.Role == schema.Tool && msg.Content != "" {
+						state.EventChan <- ExecuteEvent{
+							Type:    "agent_tool_result",
+							Step:    &currentStep,
+							Message: fmt.Sprintf("工具结果: %s", msg.Content),
+						}
+					}
+				}
+			}
 		}
 
 		if event.Output != nil && event.Output.MessageOutput != nil {
