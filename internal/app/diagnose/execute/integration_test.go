@@ -28,7 +28,7 @@ func TestExecutorWithMockData(t *testing.T) {
 				Desc: "使用`df -h /` 查看根路径磁盘使用情况",
 				Cases: []playbook.CaseBlock{
 					{
-						Case: "容量大的磁盘空间还充足则直接返回，告诉用户当前磁盘容量充足",
+						Case: "容量大的磁盘空间还充足则结束，告诉用户当前磁盘容量充足即可",
 						Steps: []playbook.Step{
 							{
 								Kind: "seq",

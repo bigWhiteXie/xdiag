@@ -14,6 +14,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -154,7 +155,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	return string(jsonResult), nil
 }
 
-// copyFile 通过SSH拷贝文件到远程节点
+// copyFile 通过SFTP拷贝文件到远程节点
 func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPath, remotePath string) CopyToolOutput {
 	// 建立SSH连接
 	config := &ssh.ClientConfig{
@@ -195,6 +196,16 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	}
 	defer client.Close()
 
+	// 创建SFTP客户端
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return CopyToolOutput{
+			Success: false,
+			Error:   fmt.Sprintf("failed to create sftp client: %v", err),
+		}
+	}
+	defer sftpClient.Close()
+
 	// 打开本地文件
 	localFile, err := os.Open(localPath)
 	if err != nil {
@@ -205,54 +216,28 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	}
 	defer localFile.Close()
 
-	// 获取文件信息
-	fileInfo, err := localFile.Stat()
+	// 创建远程文件
+	dstFile, err := sftpClient.Create(remotePath)
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get file info: %v", err),
+			Error:   fmt.Sprintf("failed to create remote file %s: %v", remotePath, err),
 		}
 	}
+	defer dstFile.Close()
 
-	// 创建session用于SCP
-	session, err := client.NewSession()
+	// 拷贝文件内容
+	_, err = io.Copy(dstFile, localFile)
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
-			Error:   fmt.Sprintf("failed to create session: %v", err),
-		}
-	}
-	defer session.Close()
-
-	// 构建远程文件路径
-	remoteFile := filepath.Join(remotePath, filepath.Base(localPath))
-
-	// 创建SCP命令
-	go func() {
-		w, _ := session.StdinPipe()
-		defer w.Close()
-
-		// 发送文件头
-		fmt.Fprintf(w, "C0644 %d %s\n", fileInfo.Size(), filepath.Base(localPath))
-
-		// 发送文件内容
-		io.Copy(w, localFile)
-
-		// 发送结束标记
-		fmt.Fprint(w, "\x00")
-	}()
-
-	// 执行SCP命令
-	if err := session.Run(fmt.Sprintf("scp -t %s", remotePath)); err != nil {
-		return CopyToolOutput{
-			Success: false,
-			Error:   fmt.Sprintf("failed to copy file: %v", err),
+			Error:   fmt.Sprintf("failed to copy file content: %v", err),
 		}
 	}
 
 	return CopyToolOutput{
 		Success: true,
-		Message: fmt.Sprintf("successfully copied %s to %s:%s", localPath, target.Address, remoteFile),
+		Message: fmt.Sprintf("successfully copied %s to %s:%s", localPath, target.Address, remotePath),
 	}
 }
 

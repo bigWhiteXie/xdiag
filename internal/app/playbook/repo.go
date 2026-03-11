@@ -3,9 +3,11 @@ package playbook
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/bigWhiteXie/xdiag/internal/config"
 	"gopkg.in/yaml.v2"
 )
 
@@ -40,6 +42,9 @@ type repo struct {
 
 // NewRepo 创建一个新的playbook存储库实例
 func NewRepo(playbooksDir string) Repo {
+	if playbooksDir == "" {
+		playbooksDir = path.Join(config.GetConfigPath(), "playbooks")
+	}
 	return &repo{
 		playbooksDir: playbooksDir,
 	}
