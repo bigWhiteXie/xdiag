@@ -28,11 +28,12 @@ const (
 
 // FieldDefinition 定义字段的元信息
 type FieldDefinition struct {
-	Name        string      `json:"name"`        // 字段名
-	Type        string      `json:"type"`        // 字段类型: string, number, boolean, array, object
-	Description string      `json:"description"` // 字段描述
-	Required    bool        `json:"required"`    // 是否必填
-	Example     interface{} `json:"example"`     // 示例值
+	Name        string            `json:"name"`        // 字段名
+	Type        string            `json:"type"`        // 字段类型: string, number, boolean, array, object
+	Description string            `json:"description"` // 字段描述
+	Required    bool              `json:"required"`    // 是否必填
+	Example     interface{}       `json:"example"`     // 示例值
+	Properties  []FieldDefinition `json:"properties"`  // 嵌套字段定义（当Type为object时使用）
 }
 
 // StructuredOutputConfig 配置结构化输出工具
@@ -70,34 +71,18 @@ func NewStructuredOutputTool(config StructuredOutputConfig) *StructuredOutputToo
 
 // Info 返回工具信息，根据配置动态生成描述
 func (t *StructuredOutputTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
-	// 构建字段描述
+	// 构建字段描述和参数
 	var fieldDescriptions []string
 	params := make(map[string]*schema.ParameterInfo)
 
 	for _, field := range t.config.Fields {
 		// 构建字段描述文本
-		requiredText := "可选"
-		if field.Required {
-			requiredText = "必填"
-		}
-
-		exampleText := ""
-		if field.Example != nil {
-			exampleJSON, _ := json.Marshal(field.Example)
-			exampleText = fmt.Sprintf("，示例: %s", string(exampleJSON))
-		}
-
-		fieldDesc := fmt.Sprintf("- %s (%s, %s): %s%s",
-			field.Name, field.Type, requiredText, field.Description, exampleText)
+		fieldDesc := t.buildFieldDescription(field, 0)
 		fieldDescriptions = append(fieldDescriptions, fieldDesc)
 
 		// 构建参数信息
-		paramType := t.mapFieldTypeToSchemaType(field.Type)
-		params[field.Name] = &schema.ParameterInfo{
-			Desc:     field.Description,
-			Type:     paramType,
-			Required: field.Required,
-		}
+		paramInfo := t.buildParameterInfo(field)
+		params[field.Name] = paramInfo
 	}
 
 	// 生成完整的工具描述
@@ -113,6 +98,55 @@ func (t *StructuredOutputTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 		Desc:        fullDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(params),
 	}, nil
+}
+
+// buildFieldDescription 递归构建字段描述
+func (t *StructuredOutputTool) buildFieldDescription(field FieldDefinition, indent int) string {
+	requiredText := "可选"
+	if field.Required {
+		requiredText = "必填"
+	}
+
+	exampleText := ""
+	if field.Example != nil {
+		exampleJSON, _ := json.Marshal(field.Example)
+		exampleText = fmt.Sprintf("，示例: %s", string(exampleJSON))
+	}
+
+	indentStr := strings.Repeat("  ", indent)
+	fieldDesc := fmt.Sprintf("%s- %s (%s, %s): %s%s",
+		indentStr, field.Name, field.Type, requiredText, field.Description, exampleText)
+
+	// 如果有嵌套字段，递归构建
+	if len(field.Properties) > 0 {
+		fieldDesc += "\n" + indentStr + "  属性:"
+		for _, prop := range field.Properties {
+			fieldDesc += "\n" + t.buildFieldDescription(prop, indent+2)
+		}
+	}
+
+	return fieldDesc
+}
+
+// buildParameterInfo 递归构建参数信息
+func (t *StructuredOutputTool) buildParameterInfo(field FieldDefinition) *schema.ParameterInfo {
+	paramType := t.mapFieldTypeToSchemaType(field.Type)
+	paramInfo := &schema.ParameterInfo{
+		Desc:     field.Description,
+		Type:     paramType,
+		Required: field.Required,
+	}
+
+	// 如果是对象类型且有嵌套属性，构建嵌套参数
+	if field.Type == "object" && len(field.Properties) > 0 {
+		subParams := make(map[string]*schema.ParameterInfo)
+		for _, prop := range field.Properties {
+			subParams[prop.Name] = t.buildParameterInfo(prop)
+		}
+		paramInfo.SubParams = subParams
+	}
+
+	return paramInfo
 }
 
 // InvokableRun 执行工具调用

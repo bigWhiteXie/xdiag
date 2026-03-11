@@ -12,7 +12,6 @@ import (
 	"github.com/bigWhiteXie/xdiag/internal/svc"
 	itool "github.com/bigWhiteXie/xdiag/internal/tool"
 	"github.com/bigWhiteXie/xdiag/pkg/formatter"
-	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -84,6 +83,34 @@ type Executor struct {
 func NewExecutor(ctx context.Context) (*Executor, error) {
 	targetRepo := svc.GetServiceContext().TargetsRepo
 	// 创建 ReAct Agent
+	// 创建结构化输出工具
+	structuredOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
+		Description: "用于输出诊断步骤的执行结果",
+		Fields: []itool.FieldDefinition{
+			{
+				Name:        "status",
+				Type:        "number",
+				Description: "步骤执行状态，0表示未完成，1表示已完成",
+				Required:    true,
+				Example:     1,
+			},
+			{
+				Name:        "result",
+				Type:        "string",
+				Description: "该步骤执行中发现的信息、执行操作的结果等",
+				Required:    true,
+				Example:     "检查完成，发现端口8080正在监听",
+			},
+			{
+				Name:        "selected_case",
+				Type:        "number",
+				Description: "对于branch类型步骤，选择的分支索引（从0开始），若没有符合条件的分支则设置为-1",
+				Required:    false,
+				Example:     0,
+			},
+		},
+	})
+
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "诊断执行器",
 		Description: "一个能够执行诊断步骤的agent",
@@ -91,7 +118,11 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 		Model:       svc.GetServiceContext().Model,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{itool.NewExecTool(targetRepo), itool.NewCopyTool(targetRepo)}, // TODO: 添加需要的工具
+				Tools: []tool.BaseTool{
+					itool.NewExecTool(targetRepo),
+					itool.NewCopyTool(targetRepo),
+					structuredOutputTool,
+				},
 			},
 		},
 	})
@@ -369,24 +400,10 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		return state, nil
 	}
 
-	// 解析结果
-	jsonStr := utils.ParseJsonByLabel("output", lastMessage.Content)
-	if jsonStr == "" {
-		state.Error = fmt.Sprintf("未找到output标签: %s", lastMessage.Content)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
-	}
-
-	var result StepResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		state.Error = fmt.Sprintf("解析结果失败: %v, 内容: %s", err, jsonStr)
+	// 解析结果 - 从工具调用中获取
+	result, err := e.extractResultFromMessage(lastMessage)
+	if err != nil {
+		state.Error = fmt.Sprintf("解析结果失败: %v", err)
 		state.RetryCount++
 		if state.EventChan != nil {
 			state.EventChan <- ExecuteEvent{
@@ -403,7 +420,7 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		// 步骤完成
 		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 			Step:   currentStep,
-			Result: result,
+			Result: *result,
 		})
 		currentContext.CurrentIndex++
 		state.RetryCount = 0
@@ -414,7 +431,7 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 			state.EventChan <- ExecuteEvent{
 				Type:   "step_complete",
 				Step:   &currentStep,
-				Result: &result,
+				Result: result,
 			}
 		}
 	} else {
@@ -507,24 +524,10 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		return state, nil
 	}
 
-	// 解析结果
-	jsonStr := utils.ParseJsonByLabel("output", lastMessage.Content)
-	if jsonStr == "" {
-		state.Error = fmt.Sprintf("未找到output标签: %s", lastMessage.Content)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
-	}
-
-	var result StepResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		state.Error = fmt.Sprintf("解析结果失败: %v, 内容: %s", err, jsonStr)
+	// 解析结果 - 从工具调用中获取
+	result, err := e.extractResultFromMessage(lastMessage)
+	if err != nil {
+		state.Error = fmt.Sprintf("解析结果失败: %v", err)
 		state.RetryCount++
 		if state.EventChan != nil {
 			state.EventChan <- ExecuteEvent{
@@ -541,7 +544,7 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		// 步骤完成
 		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 			Step:   currentStep,
-			Result: result,
+			Result: *result,
 		})
 		currentContext.CurrentIndex++
 		state.RetryCount = 0
@@ -552,7 +555,7 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 			state.EventChan <- ExecuteEvent{
 				Type:   "step_complete",
 				Step:   &currentStep,
-				Result: &result,
+				Result: result,
 			}
 		}
 		return state, nil
@@ -562,14 +565,14 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 	selectedCase := currentStep.Cases[result.SelectedCase]
 	state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 		Step:   currentStep,
-		Result: result,
+		Result: *result,
 	})
 
 	if state.EventChan != nil {
 		state.EventChan <- ExecuteEvent{
 			Type:    "branch_select",
 			Step:    &currentStep,
-			Result:  &result,
+			Result:  result,
 			Message: fmt.Sprintf("选择分支: %s", selectedCase.Case),
 		}
 	}
@@ -595,6 +598,44 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 // finishNode 完成节点
 func (e *Executor) finishNode(ctx context.Context, state *ExecuteState) (*ExecuteState, error) {
 	return state, nil
+}
+
+// extractResultFromMessage 从消息中提取结构化输出结果
+func (e *Executor) extractResultFromMessage(msg *schema.Message) (*StepResult, error) {
+	// 查找工具调用
+	for _, toolCall := range msg.ToolCalls {
+		if toolCall.Function.Name == itool.StructOutputToolName {
+			// 解析工具调用的参数
+			var toolOutput itool.StructuredOutputOutput
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolOutput); err != nil {
+				continue
+			}
+
+			// 检查是否成功
+			if toolOutput.Status != 1 {
+				return nil, fmt.Errorf("工具调用失败: %s", toolOutput.Message)
+			}
+
+			// 转换为 StepResult
+			result := &StepResult{}
+
+			if status, ok := toolOutput.Data["status"].(float64); ok {
+				result.Status = int(status)
+			}
+
+			if resultStr, ok := toolOutput.Data["result"].(string); ok {
+				result.Result = resultStr
+			}
+
+			if selectedCase, ok := toolOutput.Data["selected_case"].(float64); ok {
+				result.SelectedCase = int(selectedCase)
+			}
+
+			return result, nil
+		}
+	}
+
+	return nil, fmt.Errorf("未找到工具调用结果")
 }
 
 // renderPrompt 渲染提示词模板（用于seq类型步骤）
@@ -626,13 +667,7 @@ func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) 
 {{end}}
 {{end}}
 
-请执行当前步骤，并按照以下格式输出结果，禁止进行任何额外的解释说明:
-<output>
-{
-  "status": 0或1, // 0表示未完成，1表示已完成
-  "result": "该步骤执行中发现的信息、执行操作的结果等"
-}
-</output>`
+请执行当前步骤，并使用 output_result 工具输出结果。`
 
 	t, err := template.New("prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -693,14 +728,7 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 {{end}}
 {{end}}
 
-请根据当前情况和已执行步骤的结果，选择最合适的分支，并按照以下格式输出结果，禁止进行任何额外的解释说明:
-<output>
-{
-  "status": 1,
-  "selected_case": 分支索引(从0开始，若没有符合条件的分支则设置成-1),
-  "result": "选择该分支的理由"
-}
-</output>`
+请根据当前情况和已执行步骤的结果，选择最合适的分支，并使用 output_result 工具输出结果。`
 
 	t, err := template.New("branch_prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -770,19 +798,11 @@ func getAgentInstruction() string {
 1. 仔细阅读当前需要执行的步骤描述
 2. 根据步骤类型和描述，使用可用的工具执行相应的操作
 3. 收集执行过程中的信息和结果
-4. 判断步骤是否完成，并按照要求的格式输出结果
-
-# 输出格式
-必须严格按照以下格式输出，不要包含任何额外的文本或解释：
-<output>
-{
-  "status": 0或1,
-  "result": "详细的执行结果"
-}
-</output>
+4. 使用 output_result 工具输出结构化结果
 
 # 注意事项
 - status为1表示步骤已完成，为0表示未完成
 - result字段应包含详细的执行信息，包括发现的问题、执行的操作、获取的关键数据等
-- 如果步骤未完成，在result中说明原因和已获取的信息`
+- 如果步骤未完成，在result中说明原因和已获取的信息
+- 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
 }

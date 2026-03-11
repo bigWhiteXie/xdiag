@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bigWhiteXie/xdiag/pkg/utils"
+	itool "github.com/bigWhiteXie/xdiag/internal/tool"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -14,20 +14,90 @@ import (
 
 // Generator 用于根据用户描述生成playbook和book
 type Generator struct {
-	repo          Repo
-	llmClient     model.ToolCallingChatModel
-	maxRetries    int
-	baseRetryWait time.Duration
+	repo             Repo
+	llmClient        model.ToolCallingChatModel
+	maxRetries       int
+	baseRetryWait    time.Duration
+	structOutputTool *itool.StructuredOutputTool
 }
 
 // NewGenerator 创建一个新的Generator实例
 func NewGenerator(llmClient model.ToolCallingChatModel, playbooksDir string) *Generator {
 	repo := NewRepo(playbooksDir)
+
+	// 创建结构化输出工具
+	structOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
+		Description: "用于输出生成的诊断方案内容",
+		Fields: []itool.FieldDefinition{
+			{
+				Name:        "playbook",
+				Type:        "object",
+				Description: "playbook信息（仅在playbook不存在时需要提供）",
+				Required:    false,
+				Properties: []itool.FieldDefinition{
+					{
+						Name:        "name",
+						Type:        "string",
+						Description: "playbook名称",
+						Required:    true,
+					},
+					{
+						Name:        "desc",
+						Type:        "string",
+						Description: "playbook描述",
+						Required:    true,
+					},
+					{
+						Name:        "required_tags",
+						Type:        "array",
+						Description: "所需的标签列表",
+						Required:    false,
+					},
+				},
+			},
+			{
+				Name:        "book",
+				Type:        "object",
+				Description: "诊断方案book的详细步骤",
+				Required:    true,
+				Properties: []itool.FieldDefinition{
+					{
+						Name:        "steps",
+						Type:        "array",
+						Description: "诊断步骤列表",
+						Required:    true,
+					},
+				},
+			},
+			{
+				Name:        "ref",
+				Type:        "object",
+				Description: "诊断方案的引用信息",
+				Required:    true,
+				Properties: []itool.FieldDefinition{
+					{
+						Name:        "desc",
+						Type:        "string",
+						Description: "简短描述",
+						Required:    true,
+					},
+					{
+						Name:        "log",
+						Type:        "string",
+						Description: "相关日志路径或说明",
+						Required:    false,
+					},
+				},
+			},
+		},
+	})
+
 	return &Generator{
-		repo:          repo,
-		llmClient:     llmClient,
-		maxRetries:    3,
-		baseRetryWait: 1 * time.Second,
+		repo:             repo,
+		llmClient:        llmClient,
+		maxRetries:       3,
+		baseRetryWait:    1 * time.Second,
+		structOutputTool: structOutputTool,
 	}
 }
 
@@ -95,31 +165,7 @@ func (g *Generator) buildPrompt(req GenerateBookRequest, playbookExists bool, _ 
 
 用户描述: %s
 
-你需要生成新的诊断方案(book)和引用(ref)。
-
-请按如下格式进行返回:
-<output>
-{
-  "book": {
-    "steps": [
-      {
-        "kind": "步骤类型",
-        "desc": "步骤描述，需要包含具体操作(如shell命令、工具调用等等)不能只有语言描述",
-        "cases": [
-          {
-            "case": "条件描述",
-            "steps": [...]
-          }
-        ]
-      }
-    ]
-  },
-  "ref": {
-    "desc": "简短描述",
-    "log": "相关日志路径或说明，如果用户没有声明日志则不写"
-  }
-}
-</output>
+你需要生成新的诊断方案(book)和引用(ref)，并使用 output_result 工具输出结果。
 
 # 注意:
 1. book.name 和 ref.name 必须相同
@@ -139,34 +185,7 @@ Playbook名称: %s
 1. 为这个诊断大类生成合适的描述和标签
 2. 生成对应的诊断方案(book)和引用(ref)
 
-请按如下格式进行返回:
-<output>
-{
-  "playbook": {
-    "name": "%s",
-    "desc": "playbook描述",
-    "required_tags": ["tag1", "tag2"]
-  },
-  "book": {
-    "steps": [
-      {
-        "kind": "步骤类型",
-        "desc": "步骤描述",
-        "cases": [  // 当kind为branch时才声明cases字段
-          {
-            "case": "条件描述",
-            "steps": [...]
-          }
-        ]
-      }
-    ]
-  },
-  "ref": {
-    "desc": "简短描述",
-    "log": "相关日志路径或说明，若用户未描述方案相关日志则不写"
-  }
-}
-</output>
+使用 output_result 工具输出结果。
 
 # 注意:
 1. playbook.name必须是"%s",并且playbook.Desc是一个大的诊断方向，应该根据它的名称进行联想而不是当前方案的描述
@@ -174,32 +193,108 @@ Playbook名称: %s
 3. 步骤要具体、可执行
 4. kind字段当前仅支持: seq, branch
 5. cases字段是可选的，只在有条件分支时使用
-`, req.Description, req.PlaybookName, req.PlaybookName, req.PlaybookName)
+`, req.Description, req.PlaybookName, req.PlaybookName)
 }
 
-// callAIWithRetry 调用AI并处理JSON反序列化
+// callAIWithRetry 调用AI并处理工具调用
 func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt int) (*GeneratedContent, error) {
 	// 构建消息
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	// 调用AI
-	resp, err := g.llmClient.Generate(ctx, messages)
+	// 获取工具信息
+	toolInfo, err := g.structOutputTool.Info(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取工具信息失败: %w", err)
+	}
+
+	// 调用AI，传入工具
+	resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
 	if err != nil {
 		return nil, fmt.Errorf("AI调用失败: %w", err)
 	}
 
-	// 提取响应内容
-	responseText := resp.Content
+	// 检查是否有工具调用
+	if len(resp.ToolCalls) == 0 {
+		return nil, fmt.Errorf("AI未调用工具(尝试%d/%d), 响应内容: %s",
+			attempt+1, g.maxRetries, resp.Content)
+	}
 
-	// 尝试解析JSON
-	var content GeneratedContent
-	responseText = utils.ParseJsonByLabel("output", responseText)
-	err = json.Unmarshal([]byte(responseText), &content)
+	// 查找 output_result 工具调用
+	var toolCall *schema.ToolCall
+	for i := range resp.ToolCalls {
+		if resp.ToolCalls[i].Function.Name == itool.StructOutputToolName {
+			toolCall = &resp.ToolCalls[i]
+			break
+		}
+	}
+
+	if toolCall == nil {
+		return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)",
+			attempt+1, g.maxRetries)
+	}
+
+	// 执行工具调用
+	toolResult, err := g.structOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
 	if err != nil {
-		return nil, fmt.Errorf("JSON反序列化失败(尝试%d/%d): %w, 响应内容: %s",
-			attempt+1, g.maxRetries, err, responseText)
+		return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w",
+			attempt+1, g.maxRetries, err)
+	}
+
+	// 解析工具输出
+	var toolOutput itool.StructuredOutputOutput
+	if err := json.Unmarshal([]byte(toolResult), &toolOutput); err != nil {
+		return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w",
+			attempt+1, g.maxRetries, err)
+	}
+
+	// 检查工具调用状态
+	if toolOutput.Status != 1 {
+		return nil, fmt.Errorf("工具调用失败(尝试%d/%d): %s",
+			attempt+1, g.maxRetries, toolOutput.Message)
+	}
+
+	// 将工具输出转换为 GeneratedContent
+	var content GeneratedContent
+
+	// 解析 book
+	if bookData, ok := toolOutput.Data["book"]; ok {
+		bookJSON, err := json.Marshal(bookData)
+		if err != nil {
+			return nil, fmt.Errorf("序列化book失败: %w", err)
+		}
+		if err := json.Unmarshal(bookJSON, &content.Book); err != nil {
+			return nil, fmt.Errorf("解析book失败: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("缺少必需的book字段")
+	}
+
+	// 解析 ref
+	if refData, ok := toolOutput.Data["ref"]; ok {
+		refJSON, err := json.Marshal(refData)
+		if err != nil {
+			return nil, fmt.Errorf("序列化ref失败: %w", err)
+		}
+		if err := json.Unmarshal(refJSON, &content.Ref); err != nil {
+			return nil, fmt.Errorf("解析ref失败: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("缺少必需的ref字段")
+	}
+
+	// 解析 playbook（可选）
+	if playbookData, ok := toolOutput.Data["playbook"]; ok {
+		playbookJSON, err := json.Marshal(playbookData)
+		if err != nil {
+			return nil, fmt.Errorf("序列化playbook失败: %w", err)
+		}
+		var playbook Playbook
+		if err := json.Unmarshal(playbookJSON, &playbook); err != nil {
+			return nil, fmt.Errorf("解析playbook失败: %w", err)
+		}
+		content.Playbook = &playbook
 	}
 
 	return &content, nil
