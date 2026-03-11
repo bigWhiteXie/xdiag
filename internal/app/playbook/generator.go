@@ -165,7 +165,9 @@ func (g *Generator) buildPrompt(req GenerateBookRequest, playbookExists bool, _ 
 
 用户描述: %s
 
-你需要生成新的诊断方案(book)和引用(ref)，并使用 output_result 工具输出结果。
+你需要生成新的诊断方案(book)和引用(ref)。
+
+重要：请立即使用 output_result 工具输出结构化数据，不要进行过多的文字描述或思考过程。
 
 # 注意:
 1. book.name 和 ref.name 必须相同
@@ -185,7 +187,7 @@ Playbook名称: %s
 1. 为这个诊断大类生成合适的描述和标签
 2. 生成对应的诊断方案(book)和引用(ref)
 
-使用 output_result 工具输出结果。
+重要：请立即使用 output_result 工具输出结构化数据，不要进行过多的文字描述或思考过程。
 
 # 注意:
 1. playbook.name必须是"%s",并且playbook.Desc是一个大的诊断方向，应该根据它的名称进行联想而不是当前方案的描述
@@ -209,53 +211,72 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 		return nil, fmt.Errorf("获取工具信息失败: %w", err)
 	}
 
-	// 调用AI，传入工具
-	resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
-	if err != nil {
-		return nil, fmt.Errorf("AI调用失败: %w", err)
-	}
-
-	// 检查是否有工具调用
-	if len(resp.ToolCalls) == 0 {
-		return nil, fmt.Errorf("AI未调用工具(尝试%d/%d), 响应内容: %s",
-			attempt+1, g.maxRetries, resp.Content)
-	}
-
-	// 查找 output_result 工具调用
-	var toolCall *schema.ToolCall
-	for i := range resp.ToolCalls {
-		if resp.ToolCalls[i].Function.Name == itool.StructOutputToolName {
-			toolCall = &resp.ToolCalls[i]
-			break
+	// 最多循环5次，等待AI调用工具
+	maxRounds := 5
+	for round := 0; round < maxRounds; round++ {
+		// 调用AI，传入工具
+		resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
+		if err != nil {
+			return nil, fmt.Errorf("AI调用失败: %w", err)
 		}
+
+		// 检查是否有工具调用
+		if len(resp.ToolCalls) == 0 {
+			// 如果没有工具调用，将AI的思考加入上下文继续循环
+			if round < maxRounds-1 {
+				// 添加AI的响应到消息历史
+				messages = append(messages, schema.AssistantMessage(resp.Content, nil))
+				// 提示AI应该使用工具输出
+				messages = append(messages, schema.UserMessage("请使用 output_result 工具输出结构化数据，不要只进行文字描述。"))
+				continue
+			}
+			return nil, fmt.Errorf("AI在%d轮对话后仍未调用工具(尝试%d/%d), 最后响应: %s",
+				maxRounds, attempt+1, g.maxRetries, resp.Content)
+		}
+
+		// 查找 output_result 工具调用
+		var toolCall *schema.ToolCall
+		for i := range resp.ToolCalls {
+			if resp.ToolCalls[i].Function.Name == itool.StructOutputToolName {
+				toolCall = &resp.ToolCalls[i]
+				break
+			}
+		}
+
+		if toolCall == nil {
+			return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)",
+				attempt+1, g.maxRetries)
+		}
+
+		// 执行工具调用
+		toolResult, err := g.structOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w",
+				attempt+1, g.maxRetries, err)
+		}
+
+		// 解析工具输出
+		var toolOutput itool.StructuredOutputOutput
+		if err := json.Unmarshal([]byte(toolResult), &toolOutput); err != nil {
+			return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w",
+				attempt+1, g.maxRetries, err)
+		}
+
+		// 检查工具调用状态
+		if toolOutput.Status != 1 {
+			return nil, fmt.Errorf("工具调用失败(尝试%d/%d): %s",
+				attempt+1, g.maxRetries, toolOutput.Message)
+		}
+
+		// 将工具输出转换为 GeneratedContent
+		return g.parseGeneratedContent(&toolOutput)
 	}
 
-	if toolCall == nil {
-		return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)",
-			attempt+1, g.maxRetries)
-	}
+	return nil, fmt.Errorf("超过最大循环次数%d(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
+}
 
-	// 执行工具调用
-	toolResult, err := g.structOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
-	if err != nil {
-		return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w",
-			attempt+1, g.maxRetries, err)
-	}
-
-	// 解析工具输出
-	var toolOutput itool.StructuredOutputOutput
-	if err := json.Unmarshal([]byte(toolResult), &toolOutput); err != nil {
-		return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w",
-			attempt+1, g.maxRetries, err)
-	}
-
-	// 检查工具调用状态
-	if toolOutput.Status != 1 {
-		return nil, fmt.Errorf("工具调用失败(尝试%d/%d): %s",
-			attempt+1, g.maxRetries, toolOutput.Message)
-	}
-
-	// 将工具输出转换为 GeneratedContent
+// parseGeneratedContent 解析工具输出为 GeneratedContent
+func (g *Generator) parseGeneratedContent(toolOutput *itool.StructuredOutputOutput) (*GeneratedContent, error) {
 	var content GeneratedContent
 
 	// 解析 book
