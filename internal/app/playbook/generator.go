@@ -15,90 +15,109 @@ import (
 
 // Generator 用于根据用户描述生成playbook和book
 type Generator struct {
-	repo             Repo
-	llmClient        model.ToolCallingChatModel
-	maxRetries       int
-	baseRetryWait    time.Duration
-	structOutputTool *itool.StructuredOutputTool
+	repo                 Repo
+	llmClient            model.ToolCallingChatModel
+	maxRetries           int
+	baseRetryWait        time.Duration
+	playbookOutputTool   *itool.StructuredOutputTool
+	bookAndRefOutputTool *itool.StructuredOutputTool
 }
 
 // NewGenerator 创建一个新的Generator实例
 func NewGenerator(llmClient model.ToolCallingChatModel, playbooksDir string) *Generator {
 	repo := NewRepo(playbooksDir)
 
-	// 创建结构化输出工具
-	structOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
-		Description: "用于输出生成的诊断方案内容",
+	// 创建 playbook 生成工具
+	playbookOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
+		Description: "用于输出生成的 playbook 信息",
 		Fields: []itool.FieldDefinition{
 			{
-				Name:        "playbook",
-				Type:        "object",
-				Description: "playbook信息（仅在playbook不存在时需要提供）",
+				Name:        "name",
+				Type:        "string",
+				Description: "playbook名称",
+				Required:    true,
+			},
+			{
+				Name:        "desc",
+				Type:        "string",
+				Description: "playbook描述",
+				Required:    true,
+			},
+		},
+	})
+
+	// 创建 book 和 ref 生成工具
+	bookAndRefOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
+		Description: "用于输出生成的诊断方案 book 和 ref 信息",
+		Fields: []itool.FieldDefinition{
+			{
+				Name:        "name",
+				Type:        "string",
+				Description: "book名称",
+				Required:    true,
+			},
+			{
+				Name:        "steps",
+				Type:        "array",
+				Description: "诊断步骤列表",
+				Required:    true,
+				Properties: []itool.FieldDefinition{
+					{
+						Name:        "kind",
+						Type:        "string",
+						Description: "步骤类型，支持: seq(顺序执行), branch(条件分支)",
+						Required:    true,
+					},
+					{
+						Name:        "desc",
+						Type:        "string",
+						Description: "步骤描述或执行命令",
+						Required:    true,
+					},
+					{
+						Name:        "cases",
+						Type:        "array",
+						Description: "条件分支列表（仅当kind为branch时使用）",
+						Required:    false,
+						Properties: []itool.FieldDefinition{
+							{
+								Name:        "case",
+								Type:        "string",
+								Description: "分支条件描述",
+								Required:    true,
+							},
+							{
+								Name:        "steps",
+								Type:        "array",
+								Description: "该分支下的步骤列表",
+								Required:    true,
+							},
+						},
+					},
+				},
+			},
+			{
+				Name:        "desc",
+				Type:        "string",
+				Description: "ref简短描述",
+				Required:    true,
+			},
+			{
+				Name:        "log",
+				Type:        "string",
+				Description: "相关日志路径或说明",
 				Required:    false,
-				Properties: []itool.FieldDefinition{
-					{
-						Name:        "name",
-						Type:        "string",
-						Description: "playbook名称",
-						Required:    false,
-					},
-					{
-						Name:        "desc",
-						Type:        "string",
-						Description: "playbook描述",
-						Required:    false,
-					},
-					{
-						Name:        "required_tags",
-						Type:        "array",
-						Description: "所需的标签列表",
-						Required:    false,
-					},
-				},
-			},
-			{
-				Name:        "book",
-				Type:        "object",
-				Description: "诊断方案book的详细步骤",
-				Required:    true,
-				Properties: []itool.FieldDefinition{
-					{
-						Name:        "steps",
-						Type:        "array",
-						Description: "诊断步骤列表",
-						Required:    true,
-					},
-				},
-			},
-			{
-				Name:        "ref",
-				Type:        "object",
-				Description: "诊断方案的引用信息",
-				Required:    true,
-				Properties: []itool.FieldDefinition{
-					{
-						Name:        "desc",
-						Type:        "string",
-						Description: "简短描述",
-						Required:    true,
-					},
-					{
-						Name:        "log",
-						Type:        "string",
-						Description: "相关日志路径或说明",
-						Required:    false,
-					},
-				},
 			},
 		},
 	})
 
 	return &Generator{
-		repo:             repo,
-		llmClient:        llmClient,
-		maxRetries:       3,
-		baseRetryWait:    1 * time.Second,
-		structOutputTool: structOutputTool,
+		repo:                 repo,
+		llmClient:            llmClient,
+		maxRetries:           3,
+		baseRetryWait:        1 * time.Second,
+		playbookOutputTool:   playbookOutputTool,
+		bookAndRefOutputTool: bookAndRefOutputTool,
 	}
 }
 
@@ -109,11 +128,18 @@ type GenerateBookRequest struct {
 	Description  string // 用户对诊断步骤的描述
 }
 
-// GeneratedContent AI生成的内容
-type GeneratedContent struct {
-	Playbook *Playbook `json:"playbook,omitempty"` // 如果playbook不存在，AI生成的playbook信息
-	Book     Book      `json:"book"`               // 生成的book实例
-	Ref      Ref       `json:"ref"`                // 生成的ref实例
+// GeneratedPlaybook AI生成的playbook内容
+type GeneratedPlaybook struct {
+	Name string `json:"name"` // playbook名称
+	Desc string `json:"desc"` // playbook描述
+}
+
+// GeneratedBookAndRef AI生成的book和ref内容
+type GeneratedBookAndRef struct {
+	Name  string `json:"name"`  // book名称
+	Steps []Step `json:"steps"` // 诊断步骤列表
+	Desc  string `json:"desc"`  // ref简短描述
+	Log   string `json:"log"`   // 相关日志路径或说明
 }
 
 // GenerateAndSave 根据用户描述生成book并落盘
@@ -123,133 +149,308 @@ func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest
 
 	var existingPlaybook *Playbook
 	var err error
-	if playbookExists {
+
+	// 如果playbook不存在，先生成playbook
+	if !playbookExists {
+		generatedPlaybook, err := g.generatePlaybook(ctx, req, showDetails)
+		if err != nil {
+			return nil, fmt.Errorf("生成playbook失败: %w", err)
+		}
+
+		// 构建完整的playbook对象
+		existingPlaybook = &Playbook{
+			Name: generatedPlaybook.Name,
+			Desc: generatedPlaybook.Desc,
+		}
+
+		// 保存playbook
+		if err := g.repo.SavePlaybook(existingPlaybook); err != nil {
+			return nil, fmt.Errorf("保存playbook失败: %w", err)
+		}
+	} else {
 		existingPlaybook, err = g.repo.LoadPlaybook(req.PlaybookName)
 		if err != nil {
 			return nil, fmt.Errorf("加载playbook失败: %w", err)
 		}
 	}
 
-	// 根据playbook是否存在构建不同的AI提示词
-	prompt := g.buildPrompt(req, playbookExists, existingPlaybook)
+	// 生成book和ref
+	bookAndRef, err := g.generateBookAndRef(ctx, req, showDetails)
+	if err != nil {
+		return nil, fmt.Errorf("生成book和ref失败: %w", err)
+	}
 
-	// 调用AI生成内容，带重试机制
-	var content *GeneratedContent
+	// 构建完整的book和ref对象
+	book := &Book{
+		Name:  req.Name,
+		Steps: bookAndRef.Steps,
+	}
+
+	ref := Ref{
+		Name: req.Name,
+		Desc: bookAndRef.Desc,
+		Log:  bookAndRef.Log,
+	}
+
+	// 保存book文件
+	if err := g.repo.SaveBook(req.PlaybookName, book); err != nil {
+		return nil, fmt.Errorf("保存book失败: %w", err)
+	}
+
+	// 更新introduction.yaml中的refs列表
+	if err := g.repo.UpdatePlaybookRef(req.PlaybookName, ref); err != nil {
+		return nil, fmt.Errorf("更新playbook ref失败: %w", err)
+	}
+
+	return book, nil
+}
+
+// generatePlaybook 生成playbook信息
+func (g *Generator) generatePlaybook(ctx context.Context, req GenerateBookRequest, showDetails bool) (*GeneratedPlaybook, error) {
+	prompt := fmt.Sprintf(`你是一个诊断专家，需要为一个新的诊断大类生成playbook信息。
+
+用户描述: %s
+Playbook名称: %s
+
+请根据playbook名称生成合适的描述。注意：
+1. name必须是"%s"
+2. desc应该是一个大的诊断方向，根据名称进行联想，而不是当前具体方案的描述
+3. 请立即使用 output_result 工具输出结构化数据
+
+示例：
+- 如果playbook名称是"network"，desc应该是"网络相关的诊断方案"
+- 如果playbook名称是"database"，desc应该是"数据库相关的诊断方案"
+`, req.Description, req.PlaybookName, req.PlaybookName)
+
+	// 调用AI生成playbook
+	var result *GeneratedPlaybook
 	var lastErr error
 	for attempt := 0; attempt < g.maxRetries; attempt++ {
-		content, lastErr = g.callAIWithRetry(ctx, prompt, attempt, showDetails)
+		result, lastErr = g.callAIForPlaybook(ctx, prompt, attempt, showDetails)
 		if lastErr == nil {
 			break
 		}
 
 		if attempt < g.maxRetries-1 {
-			// 指数退避
 			waitTime := g.baseRetryWait * time.Duration(1<<uint(attempt))
 			time.Sleep(waitTime)
 		}
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("AI生成失败，已重试%d次: %w", g.maxRetries, lastErr)
+		return nil, fmt.Errorf("AI生成playbook失败，已重试%d次: %w", g.maxRetries, lastErr)
 	}
-	content.Book.Name = req.Name
-	content.Ref.Name = req.Name
-	// 保存到磁盘
-	return &content.Book, g.saveContent(req, content, existingPlaybook)
+
+	return result, nil
 }
 
-// buildPrompt 构建AI提示词
-func (g *Generator) buildPrompt(req GenerateBookRequest, playbookExists bool, _ *Playbook) string {
-	if playbookExists {
-		// Playbook已存在，只需生成book和ref
-		return fmt.Sprintf(`你是一个诊断专家，需要根据用户描述生成诊断步骤。
+// generateBookAndRef 生成book和ref信息
+func (g *Generator) generateBookAndRef(ctx context.Context, req GenerateBookRequest, showDetails bool) (*GeneratedBookAndRef, error) {
+	prompt := fmt.Sprintf(`你是一个诊断专家，需要根据用户描述生成具体的诊断步骤。
 
 用户描述: %s
 
-你需要生成新的诊断方案(book)和引用(ref)。
-
-重要：请立即使用 output_result 工具输出结构化数据，不要进行过多的文字描述或思考过程。
+你需要生成诊断方案(book)和引用(ref)。使用 output_result 工具即可输出结构化数据。
 
 # 注意:
-1. book.name 和 ref.name 必须相同
-2. 每个步骤都要具体到执行命令，不能只有语言描述
-3. kind字段当前仅支持: seq, branch
-4. cases字段是可选的，只在有条件分支时使用
+1. name字段是book和ref共用的名称
+2. steps是具体的诊断步骤列表，每个步骤都要具体到执行命令，不能只有语言描述
+3. desc是对该诊断方案的简短描述
+4. log是相关日志路径或说明（可选）
+5. kind字段当前仅支持: seq, branch
+6. cases字段是可选的，只在有条件分支时使用
+
+# 工具调用示例:
+
+示例1 - 简单顺序步骤（无分支）:
+{
+  "name": "check_disk_space",
+  "steps": [
+    {
+      "kind": "seq",
+      "desc": "df -h"
+    },
+    {
+      "kind": "seq",
+      "desc": "du -sh /var/log"
+    }
+  ],
+  "desc": "检查磁盘空间使用情况",
+  "log": "/var/log/disk.log"
+}
+
+示例2 - 包含条件分支:
+{
+  "name": "diagnose_network",
+  "steps": [
+    {
+      "kind": "seq",
+      "desc": "ping -c 4 8.8.8.8"
+    },
+    {
+      "kind": "branch",
+      "desc": "根据ping结果判断",
+      "cases": [
+        {
+          "case": "ping通",
+          "steps": [
+            {
+              "kind": "seq",
+              "desc": "curl -I https://www.google.com"
+            }
+          ]
+        },
+        {
+          "case": "ping不通",
+          "steps": [
+            {
+              "kind": "seq",
+              "desc": "ip route show"
+            },
+            {
+              "kind": "seq",
+              "desc": "cat /etc/resolv.conf"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "desc": "网络连通性诊断",
+  "log": "/var/log/network.log"
+}
+
+示例3 - 复杂嵌套分支:
+{
+  "name": "service_health_check",
+  "steps": [
+    {
+      "kind": "seq",
+      "desc": "systemctl status nginx"
+    },
+    {
+      "kind": "branch",
+      "desc": "根据服务状态判断",
+      "cases": [
+        {
+          "case": "服务运行中",
+          "steps": [
+            {
+              "kind": "seq",
+              "desc": "curl -I http://localhost:80"
+            },
+            {
+              "kind": "branch",
+              "desc": "根据HTTP响应判断",
+              "cases": [
+                {
+                  "case": "返回200",
+                  "steps": [
+                    {
+                      "kind": "seq",
+                      "desc": "tail -n 50 /var/log/nginx/access.log"
+                    }
+                  ]
+                },
+                {
+                  "case": "返回错误",
+                  "steps": [
+                    {
+                      "kind": "seq",
+                      "desc": "tail -n 50 /var/log/nginx/error.log"
+                    },
+                    {
+                      "kind": "seq",
+                      "desc": "nginx -t"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "case": "服务未运行",
+          "steps": [
+            {
+              "kind": "seq",
+              "desc": "journalctl -u nginx -n 50"
+            },
+            {
+              "kind": "seq",
+              "desc": "systemctl start nginx"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "desc": "Nginx服务健康检查",
+  "log": "/var/log/nginx/error.log"
+}
+
+请严格按照以上示例格式调用 output_result 工具。
 `, req.Description)
+
+	// 调用AI生成book和ref
+	var result *GeneratedBookAndRef
+	var lastErr error
+	for attempt := 0; attempt < g.maxRetries; attempt++ {
+		result, lastErr = g.callAIForBookAndRef(ctx, prompt, attempt, showDetails)
+		if lastErr == nil {
+			break
+		}
+
+		if attempt < g.maxRetries-1 {
+			waitTime := g.baseRetryWait * time.Duration(1<<uint(attempt))
+			time.Sleep(waitTime)
+		}
 	}
 
-	// Playbook不存在，需要生成playbook、book和ref
-	return fmt.Sprintf(`你是一个诊断专家，需要根据用户描述生成诊断步骤。
+	if lastErr != nil {
+		return nil, fmt.Errorf("AI生成book和ref失败，已重试%d次: %w", g.maxRetries, lastErr)
+	}
 
-用户描述: %s
-Playbook名称: %s
-
-该Playbook不存在，你需要:
-1. 为这个诊断大类生成合适的描述和标签
-2. 生成对应的诊断方案(book)和引用(ref)
-
-重要：请立即使用 output_result 工具输出结构化数据，不要进行过多的文字描述或思考过程。
-
-# 注意:
-1. playbook.name必须是"%s",并且playbook.Desc是一个大的诊断方向，应该根据它的名称进行联想而不是当前方案的描述
-2. book.name 和 ref.name 必须相同
-3. 步骤要具体、可执行
-4. kind字段当前仅支持: seq, branch
-5. cases字段是可选的，只在有条件分支时使用
-`, req.Description, req.PlaybookName, req.PlaybookName)
+	return result, nil
 }
 
-// callAIWithRetry 调用AI并处理工具调用
-func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt int, showDetails bool) (*GeneratedContent, error) {
-	// 创建格式化器
+// callAIForPlaybook 调用AI生成playbook
+func (g *Generator) callAIForPlaybook(ctx context.Context, prompt string, attempt int, showDetails bool) (*GeneratedPlaybook, error) {
 	agentFormatter := formatter.NewAgentFormatter(showDetails)
 
-	// 构建消息
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	// 获取工具信息
-	toolInfo, err := g.structOutputTool.Info(ctx)
+	toolInfo, err := g.playbookOutputTool.Info(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("获取工具信息失败: %w", err)
 	}
 
-	// 最多循环5次，等待AI调用工具
 	maxRounds := 5
 	for round := 0; round < maxRounds; round++ {
-		// 格式化 LLM 调用
 		if round == 0 {
 			agentFormatter.FormatLLMCall(prompt)
 		}
 
-		// 调用AI，传入工具
 		resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
 		if err != nil {
 			return nil, fmt.Errorf("AI调用失败: %w", err)
 		}
 
-		// 格式化 LLM 响应
 		agentFormatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
 
-		// 检查是否有工具调用
 		if len(resp.ToolCalls) == 0 {
-			// 格式化思考过程
 			agentFormatter.FormatThinking(resp.Content)
 
-			// 如果没有工具调用，将AI的思考加入上下文继续循环
 			if round < maxRounds-1 {
-				// 添加AI的响应到消息历史
 				messages = append(messages, schema.AssistantMessage(resp.Content, nil))
-				// 提示AI应该使用工具输出
 				messages = append(messages, schema.UserMessage("请使用 output_result 工具输出结构化数据，不要只进行文字描述。"))
 				continue
 			}
-			return nil, fmt.Errorf("AI在%d轮对话后仍未调用工具(尝试%d/%d), 最后响应: %s",
-				maxRounds, attempt+1, g.maxRetries, resp.Content)
+			return nil, fmt.Errorf("AI在%d轮对话后仍未调用工具(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
 		}
 
-		// 查找 output_result 工具调用
 		var toolCall *schema.ToolCall
 		for i := range resp.ToolCalls {
 			if resp.ToolCalls[i].Function.Name == itool.StructOutputToolName {
@@ -259,111 +460,168 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 		}
 
 		if toolCall == nil {
-			return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)",
-				attempt+1, g.maxRetries)
+			return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)", attempt+1, g.maxRetries)
 		}
 
-		// 格式化工具调用
 		agentFormatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
 
-		// 执行工具调用
-		toolResult, err := g.structOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
+		toolResult, err := g.playbookOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w",
-				attempt+1, g.maxRetries, err)
+			return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w", attempt+1, g.maxRetries, err)
 		}
 
-		// 格式化工具结果
 		agentFormatter.FormatToolResult(toolResult)
 
-		// 解析工具输出
 		var toolOutput itool.StructuredOutputOutput
 		if err := json.Unmarshal([]byte(toolResult), &toolOutput); err != nil {
-			return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w",
-				attempt+1, g.maxRetries, err)
+			return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w", attempt+1, g.maxRetries, err)
 		}
 
-		// 检查工具调用状态
 		if toolOutput.Status != 1 {
-			// 工具调用失败，将错误信息反馈给模型
 			messages = append(messages,
 				schema.AssistantMessage(resp.Content, resp.ToolCalls),
 				schema.ToolMessage(toolResult, toolCall.ID))
 			continue
 		}
 
-		// 将工具输出转换为 GeneratedContent
-		return g.parseGeneratedContent(&toolOutput)
+		// 解析playbook数据
+		var playbook GeneratedPlaybook
+		nameData, hasName := toolOutput.Data["name"]
+		descData, hasDesc := toolOutput.Data["desc"]
+
+		if !hasName || !hasDesc {
+			return nil, fmt.Errorf("缺少必需的name或desc字段")
+		}
+
+		if name, ok := nameData.(string); ok {
+			playbook.Name = name
+		} else {
+			return nil, fmt.Errorf("name字段类型错误")
+		}
+
+		if desc, ok := descData.(string); ok {
+			playbook.Desc = desc
+		} else {
+			return nil, fmt.Errorf("desc字段类型错误")
+		}
+
+		return &playbook, nil
 	}
 
 	return nil, fmt.Errorf("超过最大循环次数%d(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
 }
 
-// parseGeneratedContent 解析工具输出为 GeneratedContent
-func (g *Generator) parseGeneratedContent(toolOutput *itool.StructuredOutputOutput) (*GeneratedContent, error) {
-	var content GeneratedContent
+// callAIForBookAndRef 调用AI生成book和ref
+func (g *Generator) callAIForBookAndRef(ctx context.Context, prompt string, attempt int, showDetails bool) (*GeneratedBookAndRef, error) {
+	agentFormatter := formatter.NewAgentFormatter(showDetails)
 
-	// 解析 book
-	if bookData, ok := toolOutput.Data["book"]; ok {
-		bookJSON, err := json.Marshal(bookData)
+	messages := []*schema.Message{
+		schema.UserMessage(prompt),
+	}
+
+	toolInfo, err := g.bookAndRefOutputTool.Info(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取工具信息失败: %w", err)
+	}
+
+	maxRounds := 5
+	for round := 0; round < maxRounds; round++ {
+		if round == 0 {
+			agentFormatter.FormatLLMCall(prompt)
+		}
+
+		resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
 		if err != nil {
-			return nil, fmt.Errorf("序列化book失败: %w", err)
+			return nil, fmt.Errorf("AI调用失败: %w", err)
 		}
-		if err := json.Unmarshal(bookJSON, &content.Book); err != nil {
-			return nil, fmt.Errorf("解析book失败: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("缺少必需的book字段")
-	}
 
-	// 解析 ref
-	if refData, ok := toolOutput.Data["ref"]; ok {
-		refJSON, err := json.Marshal(refData)
+		agentFormatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
+
+		if len(resp.ToolCalls) == 0 {
+			agentFormatter.FormatThinking(resp.Content)
+
+			if round < maxRounds-1 {
+				messages = append(messages, schema.AssistantMessage(resp.Content, nil))
+				messages = append(messages, schema.UserMessage("请使用 output_result 工具输出结构化数据，不要只进行文字描述。"))
+				continue
+			}
+			return nil, fmt.Errorf("AI在%d轮对话后仍未调用工具(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
+		}
+
+		var toolCall *schema.ToolCall
+		for i := range resp.ToolCalls {
+			if resp.ToolCalls[i].Function.Name == itool.StructOutputToolName {
+				toolCall = &resp.ToolCalls[i]
+				break
+			}
+		}
+
+		if toolCall == nil {
+			return nil, fmt.Errorf("未找到 output_result 工具调用(尝试%d/%d)", attempt+1, g.maxRetries)
+		}
+
+		agentFormatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
+
+		toolResult, err := g.bookAndRefOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("序列化ref失败: %w", err)
+			return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w", attempt+1, g.maxRetries, err)
 		}
-		if err := json.Unmarshal(refJSON, &content.Ref); err != nil {
-			return nil, fmt.Errorf("解析ref失败: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("缺少必需的ref字段")
-	}
 
-	// 解析 playbook（可选）
-	if playbookData, ok := toolOutput.Data["playbook"]; ok {
-		playbookJSON, err := json.Marshal(playbookData)
+		agentFormatter.FormatToolResult(toolResult)
+
+		var toolOutput itool.StructuredOutputOutput
+		if err := json.Unmarshal([]byte(toolResult), &toolOutput); err != nil {
+			return nil, fmt.Errorf("解析工具输出失败(尝试%d/%d): %w", attempt+1, g.maxRetries, err)
+		}
+
+		if toolOutput.Status != 1 {
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, resp.ToolCalls),
+				schema.ToolMessage(toolResult, toolCall.ID))
+			continue
+		}
+
+		// 解析book和ref数据
+		var result GeneratedBookAndRef
+
+		nameData, hasName := toolOutput.Data["name"]
+		stepsData, hasSteps := toolOutput.Data["steps"]
+		descData, hasDesc := toolOutput.Data["desc"]
+
+		if !hasName || !hasSteps || !hasDesc {
+			return nil, fmt.Errorf("缺少必需的字段")
+		}
+
+		if name, ok := nameData.(string); ok {
+			result.Name = name
+		} else {
+			return nil, fmt.Errorf("name字段类型错误")
+		}
+
+		if desc, ok := descData.(string); ok {
+			result.Desc = desc
+		} else {
+			return nil, fmt.Errorf("desc字段类型错误")
+		}
+
+		// 解析steps
+		stepsJSON, err := json.Marshal(stepsData)
 		if err != nil {
-			return nil, fmt.Errorf("序列化playbook失败: %w", err)
+			return nil, fmt.Errorf("序列化steps失败: %w", err)
 		}
-		var playbook Playbook
-		if err := json.Unmarshal(playbookJSON, &playbook); err != nil {
-			return nil, fmt.Errorf("解析playbook失败: %w", err)
+		if err := json.Unmarshal(stepsJSON, &result.Steps); err != nil {
+			return nil, fmt.Errorf("解析steps失败: %w", err)
 		}
-		content.Playbook = &playbook
+
+		// 解析log（可选）
+		if logData, hasLog := toolOutput.Data["log"]; hasLog {
+			if log, ok := logData.(string); ok {
+				result.Log = log
+			}
+		}
+
+		return &result, nil
 	}
 
-	return &content, nil
-}
-
-// saveContent 保存生成的内容到磁盘
-func (g *Generator) saveContent(req GenerateBookRequest, content *GeneratedContent, playbook *Playbook) error {
-	// 如果playbook不存在，创建目录和introduction.yaml
-	if playbook == nil {
-		if content.Playbook == nil || content.Playbook.Name == "" || content.Playbook.Desc == "" {
-			return fmt.Errorf("playbook不存在但AI未生成必需的playbook信息")
-		}
-
-		// 保存playbook
-		if err := g.repo.SavePlaybook(content.Playbook); err != nil {
-			return err
-		}
-	}
-
-	// 保存book文件
-	if err := g.repo.SaveBook(req.PlaybookName, &content.Book); err != nil {
-		return err
-	}
-
-	// 更新introduction.yaml中的refs列表
-	return g.repo.UpdatePlaybookRef(req.PlaybookName, content.Ref)
+	return nil, fmt.Errorf("超过最大循环次数%d(尝试%d/%d)", maxRounds, attempt+1, g.maxRetries)
 }

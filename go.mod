@@ -1,6 +1,6 @@
 module github.com/bigWhiteXie/xdiag
 
-go 1.25.7
+go 1.24.5
 
 require (
 	github.com/cloudwego/eino v0.7.13
