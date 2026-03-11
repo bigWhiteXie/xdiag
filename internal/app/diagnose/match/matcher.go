@@ -3,11 +3,13 @@ package match
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
+	"github.com/bigWhiteXie/xdiag/internal/tool"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
@@ -54,16 +56,18 @@ type ChatModelInterface interface {
 
 // Matcher 方案匹配器
 type Matcher struct {
-	repo      playbook.Repo
-	chatModel ChatModelInterface
-	graph     compose.Runnable[*MatchState, *MatchState]
+	repo       playbook.Repo
+	chatModel  ChatModelInterface
+	graph      compose.Runnable[*MatchState, *MatchState]
+	maxRetries int // 每个节点的最大重试次数
 }
 
 // NewMatcher 创建新的方案匹配器
 func NewMatcher(repo playbook.Repo, chatModel ChatModelInterface) (*Matcher, error) {
 	m := &Matcher{
-		repo:      repo,
-		chatModel: chatModel,
+		repo:       repo,
+		chatModel:  chatModel,
+		maxRetries: 3, // 默认最大重试3次
 	}
 
 	// 构建 Graph
@@ -199,14 +203,7 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 可用的诊断方案:
 %s
 
-请分析目标资产的类型、标签和用户问题，选择最合适的诊断方案。
-输出格式如下，禁止进行任何额外的解释说明:
-<output>
-{
-  "playbook_name": "选择的playbook名称",
-  "reason": "选择理由"
-}
-</output>`,
+请分析目标资产的类型、标签和用户问题，选择最合适的诊断方案。`,
 		state.Target.Name,
 		state.Target.Kind,
 		state.Target.Address,
@@ -216,37 +213,97 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 		playbooksDesc,
 	)
 
-	// 调用LLM
+	// 创建结构化输出工具
+	structTool := tool.NewStructuredOutputTool(tool.StructuredOutputConfig{
+		Description: "当确定playbook后或无相关playbook时，使用此工具输出结果",
+		Fields: []tool.FieldDefinition{
+			{
+				Name:        "playbook_name",
+				Type:        "string",
+				Description: "选择的playbook名称",
+				Required:    true,
+				Example:     "mysql_diagnostics",
+			},
+			{
+				Name:        "reason",
+				Type:        "string",
+				Description: "选择该playbook的理由",
+				Required:    true,
+				Example:     "该方案适用于MySQL数据库的性能诊断",
+			},
+		},
+	})
+
+	// 获取工具信息
+	toolInfo, err := structTool.Info(ctx)
+	if err != nil {
+		return state, fmt.Errorf("获取工具信息失败: %w", err)
+	}
+
+	// 重试循环
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	resp, err := m.chatModel.Generate(ctx, messages)
-	if err != nil {
-		return state, fmt.Errorf("LLM调用失败: %w", err)
-	}
-
-	// 解析响应
-	content := resp.Content
-	jsonstr := utils.ParseJsonByLabel("output", content)
-	var selection PlaybookSelection
-	if err := json.Unmarshal([]byte(jsonstr), &selection); err != nil {
-		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, jsonstr)
-	}
-
-	// 查找选中的playbook
-	for i := range availablePlaybooks {
-		if availablePlaybooks[i].Name == selection.PlaybookName {
-			state.SelectedPlaybook = &availablePlaybooks[i]
-			break
+	for retry := 0; retry < m.maxRetries; retry++ {
+		// 调用LLM with tool
+		resp, err := m.chatModel.Generate(ctx, messages,
+			model.WithTools([]*schema.ToolInfo{toolInfo}))
+		if err != nil {
+			return state, fmt.Errorf("LLM调用失败: %w", err)
 		}
+
+		// 检查是否返回了tool call
+		if len(resp.ToolCalls) == 0 {
+			// 未进行工具调用，添加提示消息并重试
+			feedbackMsg := "你必须调用 output_result 工具来输出结果，请重新尝试。"
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, nil),
+				schema.UserMessage(feedbackMsg))
+			continue
+		}
+
+		// 执行工具调用
+		toolCall := resp.ToolCalls[0]
+		result, err := structTool.InvokableRun(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			return state, fmt.Errorf("执行结构化输出工具失败: %w", err)
+		}
+
+		// 解析结果
+		var output tool.StructuredOutputOutput
+		if err := json.Unmarshal([]byte(result), &output); err != nil {
+			return state, fmt.Errorf("解析工具输出失败: %w", err)
+		}
+
+		// 检查工具调用状态
+		if output.Status != 1 {
+
+			return state, errors.New("未找到相关合适的playbook")
+		}
+
+		// 成功获取结果
+		var selection PlaybookSelection
+		if err := utils.UnmarshalMap(output.Data, &selection); err != nil {
+			return state, fmt.Errorf("转换数据失败: %w", err)
+		}
+
+		// 查找选中的playbook
+		for i := range availablePlaybooks {
+			if availablePlaybooks[i].Name == selection.PlaybookName {
+				state.SelectedPlaybook = &availablePlaybooks[i]
+				return state, nil
+			}
+		}
+
+		// 未找到对应的playbook，反馈给模型
+		feedbackMsg := fmt.Sprintf("未找到名为 '%s' 的playbook，请从可用的诊断方案列表中选择一个存在的方案。", selection.PlaybookName)
+		messages = append(messages,
+			schema.AssistantMessage(resp.Content, resp.ToolCalls),
+			schema.UserMessage(feedbackMsg))
 	}
 
-	if state.SelectedPlaybook == nil {
-		return state, fmt.Errorf("未找到选中的playbook: %s", selection.PlaybookName)
-	}
-
-	return state, nil
+	return state, fmt.Errorf("选择playbook失败: 已达到最大重试次数 %d", m.maxRetries)
 }
 
 // selectRefNode 步骤2: 选择ref
@@ -275,16 +332,7 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 可用的诊断参考:
 %s
 
-请分析目标资产和用户问题，选择最合适的诊断参考。如果没有合适的诊断参考，请将status设置为0。
-输出格式如下，禁止进行任何额外的解释说明:
-<output>
-{
-  "ref_name": "选择的ref名称(如果没有合适的则为空字符串)",
-  "status": 1或0 (1表示找到合适的ref, 0表示未找到),
-  "reason": "选择理由或未找到的原因"
-}
-</output>
-`,
+请分析目标资产和用户问题，选择最合适的诊断参考。如果没有合适的诊断参考，请将status设置为0。`,
 		state.Target.Name,
 		state.Target.Kind,
 		state.Target.Address,
@@ -296,44 +344,117 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 		refsDesc,
 	)
 
-	// 调用LLM
+	// 创建结构化输出工具
+	structTool := tool.NewStructuredOutputTool(tool.StructuredOutputConfig{
+		Description: "当确定相关ref或当前无相关ref时使用此工具结构化输出",
+		Fields: []tool.FieldDefinition{
+			{
+				Name:        "ref_name",
+				Type:        "string",
+				Description: "选择的ref名称(如果没有合适的则为空字符串)",
+				Required:    false,
+				Example:     "slow_query_analysis",
+			},
+			{
+				Name:        "status",
+				Type:        "number",
+				Description: "1表示找到合适的ref, 0表示未找到",
+				Required:    true,
+				Example:     1,
+			},
+			{
+				Name:        "reason",
+				Type:        "string",
+				Description: "选择理由或未找到的原因",
+				Required:    true,
+				Example:     "该ref适用于慢查询分析场景",
+			},
+		},
+	})
+
+	// 获取工具信息
+	toolInfo, err := structTool.Info(ctx)
+	if err != nil {
+		return state, fmt.Errorf("获取工具信息失败: %w", err)
+	}
+
+	// 重试循环
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	resp, err := m.chatModel.Generate(ctx, messages)
-	if err != nil {
-		return state, fmt.Errorf("LLM调用失败: %w", err)
-	}
+	for retry := 0; retry < m.maxRetries; retry++ {
+		// 调用LLM with tool
+		resp, err := m.chatModel.Generate(ctx, messages,
+			model.WithTools([]*schema.ToolInfo{toolInfo}))
+		if err != nil {
+			return state, fmt.Errorf("LLM调用失败: %w", err)
+		}
 
-	// 解析响应
-	content := resp.Content
-	var selection RefSelection
-	jsonstr := utils.ParseJsonByLabel("output", content)
-	if err := json.Unmarshal([]byte(jsonstr), &selection); err != nil {
-		return state, fmt.Errorf("解析LLM响应失败: %w, 响应内容: %s", err, jsonstr)
-	}
+		// 检查是否返回了tool call
+		if len(resp.ToolCalls) == 0 {
+			// 未进行工具调用，添加提示消息并重试
+			feedbackMsg := "你必须调用 output_result 工具来输出结果，请重新尝试。"
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, nil),
+				schema.UserMessage(feedbackMsg))
+			continue
+		}
 
-	state.RefStatus = selection.Status
+		// 执行工具调用
+		toolCall := resp.ToolCalls[0]
+		result, err := structTool.InvokableRun(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			return state, fmt.Errorf("执行结构化输出工具失败: %w", err)
+		}
 
-	if selection.Status == 1 {
-		// 找到合适的ref
-		for i := range state.SelectedPlaybook.Refs {
-			if state.SelectedPlaybook.Refs[i].Name == selection.RefName {
-				state.SelectedRef = &state.SelectedPlaybook.Refs[i]
-				break
+		// 解析结果
+		var output tool.StructuredOutputOutput
+		if err := json.Unmarshal([]byte(result), &output); err != nil {
+			return state, fmt.Errorf("解析工具输出失败: %w", err)
+		}
+
+		// 检查工具调用状态
+		if output.Status != 1 {
+			// 工具调用失败，将缺失信息反馈给模型
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, resp.ToolCalls),
+				schema.ToolMessage(result, toolCall.ID))
+			continue
+		}
+
+		// 成功获取结果
+		var selection RefSelection
+		if err := utils.UnmarshalMap(output.Data, &selection); err != nil {
+			return state, fmt.Errorf("转换数据失败: %w", err)
+		}
+
+		state.RefStatus = selection.Status
+
+		if selection.Status == 1 {
+			// 找到合适的ref
+			for i := range state.SelectedPlaybook.Refs {
+				if state.SelectedPlaybook.Refs[i].Name == selection.RefName {
+					state.SelectedRef = &state.SelectedPlaybook.Refs[i]
+					return state, nil
+				}
 			}
+
+			// 未找到对应的ref，反馈给模型
+			feedbackMsg := fmt.Sprintf("未找到名为 '%s' 的ref，请从可用的诊断参考列表中选择一个存在的ref，或将status设置为0表示没有合适的ref。", selection.RefName)
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, resp.ToolCalls),
+				schema.UserMessage(feedbackMsg))
+			continue
+		} else {
+			// 未找到合适的ref，将当前playbook加入排除列表
+			state.ExcludedPlaybooks = append(state.ExcludedPlaybooks, state.SelectedPlaybook.Name)
+			state.SelectedPlaybook = nil
+			return state, nil
 		}
-		if state.SelectedRef == nil {
-			return state, fmt.Errorf("未找到选中的ref: %s", selection.RefName)
-		}
-	} else {
-		// 未找到合适的ref，将当前playbook加入排除列表
-		state.ExcludedPlaybooks = append(state.ExcludedPlaybooks, state.SelectedPlaybook.Name)
-		state.SelectedPlaybook = nil
 	}
 
-	return state, nil
+	return state, fmt.Errorf("选择ref失败: 已达到最大重试次数 %d", m.maxRetries)
 }
 
 // finishNode 完成节点

@@ -170,14 +170,6 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 		config.Auth = append(config.Auth, ssh.Password(target.Password))
 	}
 
-	// 如果有SSH key，也添加key认证
-	if target.Node != "" {
-		signer, err := ssh.ParsePrivateKey([]byte(target.Node))
-		if err == nil {
-			config.Auth = append(config.Auth, ssh.PublicKeys(signer))
-		}
-	}
-
 	if len(config.Auth) == 0 {
 		return CopyToolOutput{
 			Success: false,

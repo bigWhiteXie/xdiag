@@ -15,23 +15,17 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
 )
 
 const (
 	template = `
-你是一个专业的用户问题分析专家，能够根据用户的故障描述，使用可用的工具找到最合适的目标，当无相关目标时将status设置为2即可。当确定target后需要按照如下格式输出字符串此时表示当前行为已经结束：
-<output>
-{
-   "status": 1, // 1表示已找到目标，2表示没有相关目标
-   "target_id": 4 // 目标ID，仅当status为1时包含此字段
-}
-</output>
-严格按照示例格式返回，不要包含任何额外的文本或解释。
+你是一个专业的用户问题分析专家，能够根据用户的故障描述，使用可用的工具找到最合适的目标。
 
 # 工作方式
-根据用户问题，先尽可能用精确的条件、多条件去查找相关target，当找不到时在逐步放宽条件直到找到target或发现target不存在。
-不要进行联想，当放宽查询条件后仍未找到符合用户描述的target时按要求返回即可
+1. 根据用户问题，先尽可能用精确的条件、多条件去查找相关target
+2. 当找不到时逐步放宽条件直到找到target或发现target不存在
+3. 不要进行联想，当放宽查询条件后仍未找到符合用户描述的target时，使用结构化输出工具返回status=2
+4. **重要**：当找到合适的target后，必须立即调用结构化输出工具(output_result)返回结果，status=1并提供target_id
 
 # 禁止
 1. 禁止去分析报错原因
@@ -39,10 +33,17 @@ const (
 # 当前支持的target类型：%s
 如果你需要使用kind查找target，必须使用上述类型
 `
+
+	questionTemplate = `
+用户问题：%s
+
+%s
+`
 )
 
 type RouteTargetAgent struct {
-	recAgent *adk.ChatModelAgent
+	recAgent         *adk.ChatModelAgent
+	executionHistory []string
 }
 
 func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
@@ -52,6 +53,28 @@ func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
 		return nil, err
 	}
 	kindStr := strings.Join(kinds, ",")
+
+	// 创建结构化输出工具
+	structuredTool := innertool.NewStructuredOutputTool(innertool.StructuredOutputConfig{
+		Description: "当确定target后或无相关目标时，使用此工具输出结果",
+		Fields: []innertool.FieldDefinition{
+			{
+				Name:        "status",
+				Type:        "number",
+				Description: "1表示已找到目标，2表示没有相关目标",
+				Required:    true,
+				Example:     1,
+			},
+			{
+				Name:        "target_id",
+				Type:        "number",
+				Description: "目标ID，仅当status为1时需要提供此字段",
+				Required:    false,
+				Example:     4,
+			},
+		},
+	})
+
 	a, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "目标路由器",
 		Description: "一个能够根据用户故障描述路由到最合适目标的agent",
@@ -59,7 +82,10 @@ func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
 		Model:       svc.GetServiceContext().Model,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{innertool.NewTargetFinderTool(svc.GetServiceContext().TargetsRepo)},
+				Tools: []tool.BaseTool{
+					innertool.NewTargetFinderTool(svc.GetServiceContext().TargetsRepo),
+					structuredTool,
+				},
 			},
 		},
 	})
@@ -69,7 +95,8 @@ func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
 	}
 
 	return &RouteTargetAgent{
-		recAgent: a,
+		recAgent:         a,
+		executionHistory: make([]string, 0),
 	}, nil
 }
 
@@ -84,10 +111,16 @@ func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, erro
 		TargetId uint `json:"target_id"`
 	}
 
-	// 使用 Query 方法，它会自动处理整个 ReAct 循环
-	iter := runner.Query(ctx, question)
+	// 构建包含历史记录的问题
+	historyContext := ""
+	if len(a.executionHistory) > 0 {
+		historyContext = "# 历史执行记录\n" + strings.Join(a.executionHistory, "\n")
+	}
+	fullQuestion := fmt.Sprintf(questionTemplate, question, historyContext)
 
-	var lastMessage *schema.Message
+	// 使用 Query 方法，它会自动处理整个 ReAct 循环
+	iter := runner.Query(ctx, fullQuestion)
+
 	for {
 		event, ok := iter.Next()
 		if !ok {
@@ -103,7 +136,7 @@ func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, erro
 			return 0, fmt.Errorf("agent error: %w", event.Err)
 		}
 
-		// 获取输出消息
+		// 获取工具调用输出 - 从 MessageOutput 中提取
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			msg, err := event.Output.MessageOutput.GetMessage()
 			if err != nil {
@@ -111,33 +144,44 @@ func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, erro
 				continue
 			}
 
-			// 只处理 assistant 角色的消息
-			if msg.Role == schema.Assistant {
-				lastMessage = msg
+			// 检查是否是工具角色的消息
+			if event.Output.MessageOutput.Role == "tool" && event.Output.MessageOutput.ToolName == innertool.StructOutputToolName {
+				// 尝试反序列化工具输出
+				var toolOutput innertool.StructuredOutputOutput
+				if err := json.Unmarshal([]byte(msg.Content), &toolOutput); err != nil {
+					log.Printf("[route agent] failed to parse tool output: %v", err)
+					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 工具调用失败: 输出格式错误 - %v", err))
+					continue
+				}
+
+				// 检查工具调用是否成功
+				if toolOutput.Status != 1 {
+					// 记录失败原因，继续执行
+					a.executionHistory = append(a.executionHistory,
+						fmt.Sprintf("- 工具调用失败: %s, 缺少字段: %v", toolOutput.Message, toolOutput.MissingFields))
+					continue
+				}
+
+				// 将 map 反序列化为 Answer 结构体
+				ans := &Answer{}
+				if err := utils.UnmarshalMap(toolOutput.Data, ans); err != nil {
+					log.Printf("[route agent] failed to unmarshal answer: %v", err)
+					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 数据反序列化失败: %v", err))
+					continue
+				}
+
+				// 成功获取结果
+				if ans.Status == 1 {
+					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 成功找到目标: target_id=%d", ans.TargetId))
+					return ans.TargetId, nil
+				} else if ans.Status == 2 {
+					a.executionHistory = append(a.executionHistory, "- 未找到相关目标")
+					return 0, nil
+				}
 			}
 		}
 	}
 
-	// 处理最终结果
-	if lastMessage == nil {
-		return 0, errors.New("no response from agent")
-	}
-
-	jsonStr := utils.ParseJsonByLabel("output", lastMessage.Content)
-	if jsonStr == "" {
-		return 0, fmt.Errorf("no output tag found in response: %s", lastMessage.Content)
-	}
-
-	ans := &Answer{}
-	if err := json.Unmarshal([]byte(jsonStr), ans); err != nil {
-		return 0, fmt.Errorf("failed to parse json: %w, content: %s", err, jsonStr)
-	}
-
-	if ans.Status == 1 {
-		return ans.TargetId, nil
-	} else if ans.Status == 2 {
-		return 0, nil
-	}
-
-	return 0, fmt.Errorf("unexpected status: %d", ans.Status)
+	// 如果循环结束仍未找到结果
+	return 0, errors.New("agent completed without calling output_result tool")
 }
