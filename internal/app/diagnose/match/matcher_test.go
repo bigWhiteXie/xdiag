@@ -136,7 +136,7 @@ func TestMatcherLLM(t *testing.T) {
 	assert.NotNil(t, model)
 	//todo:mock 基于内存的playbook的repo，并提供
 
-	matcher, _ := NewMatcher(&MockPlaybookRepo{}, model)
+	matcher, _ := NewMatcher(&MockPlaybookRepo{}, model, false)
 	// 准备多个目标和问题
 	cases := []struct {
 		target   *targets.Target

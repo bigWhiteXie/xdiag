@@ -52,7 +52,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	svc.SetModel(llm)
 	svc.SetBookRepo(playbook.NewRepo(config.PlaybooksDir))
 
-	agent, err := route.NewTargetRouteAgent(ctx)
+	agent, err := route.NewTargetRouteAgent(ctx, showDetails)
 	if err != nil {
 		return fmt.Errorf("创建路由代理失败: %w", err)
 	}
@@ -79,7 +79,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("测试目标连通性失败: %w", err)
 	}
 	// ========================匹配方案========================
-	matcher, err := match.NewMatcher(svc.GetServiceContext().BookRepo, svc.GetServiceContext().Model)
+	matcher, err := match.NewMatcher(svc.GetServiceContext().BookRepo, svc.GetServiceContext().Model, showDetails)
 	if err != nil {
 		return fmt.Errorf("创建匹配器失败: %w", err)
 	}

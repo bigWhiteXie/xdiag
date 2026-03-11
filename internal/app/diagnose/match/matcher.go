@@ -10,6 +10,7 @@ import (
 	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 	"github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/formatter"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
@@ -60,14 +61,16 @@ type Matcher struct {
 	chatModel  ChatModelInterface
 	graph      compose.Runnable[*MatchState, *MatchState]
 	maxRetries int // 每个节点的最大重试次数
+	formatter  *formatter.AgentFormatter
 }
 
 // NewMatcher 创建新的方案匹配器
-func NewMatcher(repo playbook.Repo, chatModel ChatModelInterface) (*Matcher, error) {
+func NewMatcher(repo playbook.Repo, chatModel ChatModelInterface, showDetails bool) (*Matcher, error) {
 	m := &Matcher{
 		repo:       repo,
 		chatModel:  chatModel,
 		maxRetries: 3, // 默认最大重试3次
+		formatter:  formatter.NewAgentFormatter(showDetails),
 	}
 
 	// 构建 Graph
@@ -253,6 +256,9 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 			return state, fmt.Errorf("LLM调用失败: %w", err)
 		}
 
+		// 格式化输出 LLM 响应
+		m.formatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
+
 		// 检查是否返回了tool call
 		if len(resp.ToolCalls) == 0 {
 			// 未进行工具调用，添加提示消息并重试
@@ -265,10 +271,14 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 
 		// 执行工具调用
 		toolCall := resp.ToolCalls[0]
+		m.formatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
+
 		result, err := structTool.InvokableRun(ctx, toolCall.Function.Arguments)
 		if err != nil {
 			return state, fmt.Errorf("执行结构化输出工具失败: %w", err)
 		}
+
+		m.formatter.FormatToolResult(result)
 
 		// 解析结果
 		var output tool.StructuredOutputOutput
@@ -391,6 +401,9 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 			return state, fmt.Errorf("LLM调用失败: %w", err)
 		}
 
+		// 格式化输出 LLM 响应
+		m.formatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
+
 		// 检查是否返回了tool call
 		if len(resp.ToolCalls) == 0 {
 			// 未进行工具调用，添加提示消息并重试
@@ -403,10 +416,14 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 
 		// 执行工具调用
 		toolCall := resp.ToolCalls[0]
+		m.formatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
+
 		result, err := structTool.InvokableRun(ctx, toolCall.Function.Arguments)
 		if err != nil {
 			return state, fmt.Errorf("执行结构化输出工具失败: %w", err)
 		}
+
+		m.formatter.FormatToolResult(result)
 
 		// 解析结果
 		var output tool.StructuredOutputOutput

@@ -246,7 +246,7 @@ func TestRouteTargetAgent_WithRealLLM(t *testing.T) {
 	svc.SetModel(model)
 
 	// 创建 RouteTargetAgent
-	agent, err := NewTargetRouteAgent(ctx)
+	agent, err := NewTargetRouteAgent(ctx, true)
 	assert.NoError(t, err)
 	assert.NotNil(t, agent)
 

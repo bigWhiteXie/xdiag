@@ -10,6 +10,7 @@ import (
 
 	"github.com/bigWhiteXie/xdiag/internal/svc"
 	innertool "github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/formatter"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
@@ -44,9 +45,10 @@ const (
 type RouteTargetAgent struct {
 	recAgent         *adk.ChatModelAgent
 	executionHistory []string
+	formatter        *formatter.AgentFormatter
 }
 
-func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
+func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAgent, error) {
 	targetRepo := svc.GetServiceContext().TargetsRepo
 	kinds, err := targetRepo.GetAllKinds()
 	if err != nil {
@@ -97,6 +99,7 @@ func NewTargetRouteAgent(ctx context.Context) (*RouteTargetAgent, error) {
 	return &RouteTargetAgent{
 		recAgent:         a,
 		executionHistory: make([]string, 0),
+		formatter:        formatter.NewAgentFormatter(showDetails),
 	}, nil
 }
 
@@ -127,13 +130,25 @@ func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, erro
 			break
 		}
 
-		// 记录事件日志
-		str, _ := json.Marshal(event)
-		log.Printf("[route agent event]: %s", str)
-
 		// 处理错误
 		if event.Err != nil {
 			return 0, fmt.Errorf("agent error: %w", event.Err)
+		}
+
+		// 格式化输出
+		if event.Output != nil && event.Output.MessageOutput != nil {
+			msg, _ := event.Output.MessageOutput.GetMessage()
+
+			// 格式化 LLM 响应
+			if event.Output.MessageOutput.Role == "assistant" {
+				hasToolCall := len(msg.ToolCalls) > 0
+				a.formatter.FormatLLMResponse(msg.Content, hasToolCall)
+			}
+
+			// 格式化工具调用
+			if event.Output.MessageOutput.Role == "tool" {
+				a.formatter.FormatToolResult(msg.Content)
+			}
 		}
 
 		// 获取工具调用输出 - 从 MessageOutput 中提取

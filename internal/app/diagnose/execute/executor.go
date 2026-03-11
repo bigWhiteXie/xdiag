@@ -11,6 +11,7 @@ import (
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 	"github.com/bigWhiteXie/xdiag/internal/svc"
 	itool "github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/formatter"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
@@ -160,16 +161,36 @@ func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *tar
 }
 
 func (e *Executor) GetReport(ch chan ExecuteEvent, showDetails bool) string {
+	eventFormatter := formatter.NewEventFormatter(showDetails)
 	var lastMsg ExecuteEvent
+
 	for event := range ch {
 		lastMsg = event
 		if event.Type == "complete" {
 			break
 		}
 
+		// 使用格式化器输出事件
 		if showDetails {
-			jsonstr, _ := json.Marshal(event)
-			fmt.Printf("[执行记录]：%s\n", jsonstr)
+			stepDesc := ""
+			result := ""
+			if event.Step != nil {
+				stepDesc = event.Step.Desc
+			}
+			if event.Result != nil {
+				result = event.Result.Result
+			}
+
+			output := eventFormatter.FormatEvent(
+				event.Type,
+				stepDesc,
+				result,
+				event.Message,
+				event.Error,
+			)
+			if output != "" {
+				fmt.Print(output)
+			}
 		}
 	}
 
@@ -729,15 +750,6 @@ func (e *Executor) generateReport(state *ExecuteState) string {
 		sb.WriteString(fmt.Sprintf("### 步骤 %d: %s\n\n", i+1, executed.Step.Desc))
 		sb.WriteString(fmt.Sprintf("- **类型**: %s\n", executed.Step.Kind))
 		sb.WriteString(fmt.Sprintf("- **结果**: %s\n\n", executed.Result.Result))
-	}
-
-	if state.CurrentStepIndex < len(state.Book.Steps) {
-		sb.WriteString("## 未完成的步骤\n\n")
-		for i := state.CurrentStepIndex; i < len(state.Book.Steps); i++ {
-			step := state.Book.Steps[i]
-			sb.WriteString(fmt.Sprintf("- %s (类型: %s)\n", step.Desc, step.Kind))
-		}
-		sb.WriteString("\n")
 	}
 
 	sb.WriteString("## 总结\n\n")
