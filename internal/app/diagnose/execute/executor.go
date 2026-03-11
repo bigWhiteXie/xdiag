@@ -84,34 +84,6 @@ type Executor struct {
 func NewExecutor(ctx context.Context) (*Executor, error) {
 	targetRepo := svc.GetServiceContext().TargetsRepo
 	// 创建 ReAct Agent
-	// 创建结构化输出工具
-	structuredOutputTool := itool.NewStructuredOutputTool(itool.StructuredOutputConfig{
-		Description: "用于输出诊断步骤的执行结果",
-		Fields: []itool.FieldDefinition{
-			{
-				Name:        "status",
-				Type:        "number",
-				Description: "步骤执行状态，0表示未完成，1表示已完成",
-				Required:    true,
-				Example:     1,
-			},
-			{
-				Name:        "result",
-				Type:        "string",
-				Description: "该步骤执行中发现的信息、执行操作的结果等",
-				Required:    true,
-				Example:     "检查完成，发现端口8080正在监听",
-			},
-			{
-				Name:        "selected_case",
-				Type:        "number",
-				Description: "对于branch类型步骤，选择的分支索引（从0开始），若没有符合条件的分支则设置为-1",
-				Required:    false,
-				Example:     0,
-			},
-		},
-	})
-
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "诊断执行器",
 		Description: "一个能够执行诊断步骤的agent",
@@ -122,7 +94,6 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 				Tools: []tool.BaseTool{
 					itool.NewExecTool(targetRepo),
 					itool.NewCopyTool(targetRepo),
-					structuredOutputTool,
 				},
 			},
 		},
@@ -678,40 +649,40 @@ func (e *Executor) finishNode(ctx context.Context, state *ExecuteState) (*Execut
 
 // extractResultFromMessage 从消息中提取结构化输出结果
 func (e *Executor) extractResultFromMessage(msg *schema.Message) (*StepResult, error) {
-	// 查找工具调用
-	for _, toolCall := range msg.ToolCalls {
-		if toolCall.Function.Name == itool.StructOutputToolName {
-			// 解析工具调用的参数
-			var toolOutput itool.StructuredOutputOutput
-			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolOutput); err != nil {
-				continue
-			}
+	// 从消息内容中提取 <output> 标签内的 JSON
+	content := msg.Content
 
-			// 检查是否成功
-			if toolOutput.Status != 1 {
-				return nil, fmt.Errorf("工具调用失败: %s", toolOutput.Message)
-			}
+	// 查找 <output> 标签
+	startTag := "<output>"
+	endTag := "</output>"
 
-			// 转换为 StepResult
-			result := &StepResult{}
-
-			if status, ok := toolOutput.Data["status"].(float64); ok {
-				result.Status = int(status)
-			}
-
-			if resultStr, ok := toolOutput.Data["result"].(string); ok {
-				result.Result = resultStr
-			}
-
-			if selectedCase, ok := toolOutput.Data["selected_case"].(float64); ok {
-				result.SelectedCase = int(selectedCase)
-			}
-
-			return result, nil
-		}
+	startIdx := strings.Index(content, startTag)
+	if startIdx == -1 {
+		return nil, fmt.Errorf("未找到 <output> 标签")
 	}
 
-	return nil, fmt.Errorf("未找到工具调用结果")
+	endIdx := strings.Index(content[startIdx:], endTag)
+	if endIdx == -1 {
+		return nil, fmt.Errorf("未找到 </output> 结束标签")
+	}
+
+	// 提取 JSON 内容
+	jsonStr := content[startIdx+len(startTag) : startIdx+endIdx]
+	jsonStr = strings.TrimSpace(jsonStr)
+
+	// 清理可能的 markdown 代码块标记
+	jsonStr = strings.TrimPrefix(jsonStr, "```json")
+	jsonStr = strings.TrimPrefix(jsonStr, "```")
+	jsonStr = strings.TrimSuffix(jsonStr, "```")
+	jsonStr = strings.TrimSpace(jsonStr)
+
+	// 解析 JSON
+	var result StepResult
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("解析 JSON 失败: %w, 原始内容: %s", err, jsonStr)
+	}
+
+	return &result, nil
 }
 
 // renderPrompt 渲染提示词模板（用于seq类型步骤）
@@ -743,7 +714,21 @@ func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) 
 {{end}}
 {{end}}
 
-请执行当前步骤，并使用 output_result 工具输出结果。`
+请执行当前步骤，并将结果以 JSON 格式输出在 <output></output> 标签内。
+
+JSON 格式要求：
+{
+  "status": 1,  // 0表示未完成，1表示已完成
+  "result": "步骤执行中发现的信息、执行操作的结果等"
+}
+
+示例输出：
+<output>
+{
+  "status": 1,
+  "result": "检查完成，发现端口8080正在监听"
+}
+</output>`
 
 	t, err := template.New("prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -804,7 +789,23 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 {{end}}
 {{end}}
 
-请根据当前情况和已执行步骤的结果，选择最合适的分支，并使用 output_result 工具输出结果。`
+请根据当前情况和已执行步骤的结果，选择最合适的分支，并将结果以 JSON 格式输出在 <output></output> 标签内。
+
+JSON 格式要求：
+{
+  "status": 1,  // 0表示未完成，1表示已完成
+  "result": "分支选择的原因和依据",
+  "selected_case": 0  // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
+}
+
+示例输出：
+<output>
+{
+  "status": 1,
+  "result": "根据端口检查结果，发现8080端口正在监听，选择服务运行分支",
+  "selected_case": 0
+}
+</output>`
 
 	t, err := template.New("branch_prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -874,11 +875,32 @@ func getAgentInstruction() string {
 1. 仔细阅读当前需要执行的步骤描述
 2. 根据步骤类型和描述，使用可用的工具执行相应的操作
 3. 收集执行过程中的信息和结果
-4. 使用 output_result 工具输出结构化结果
+4. 将结果以 JSON 格式输出在 <output></output> 标签内
+
+# 输出格式
+必须将结果包裹在 <output></output> 标签内，格式如下：
+
+对于普通步骤：
+<output>
+{
+  "status": 1,
+  "result": "步骤执行的详细结果"
+}
+</output>
+
+对于分支选择步骤：
+<output>
+{
+  "status": 1,
+  "result": "分支选择的原因",
+  "selected_case": 0
+}
+</output>
 
 # 注意事项
 - status为1表示步骤已完成，为0表示未完成
 - result字段应包含详细的执行信息，包括发现的问题、执行的操作、获取的关键数据等
 - 如果步骤未完成，在result中说明原因和已获取的信息
-- 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
+- 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
+- 必须确保输出的 JSON 格式正确，可以被正常解析`
 }

@@ -2,7 +2,6 @@ package execute_test
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -55,7 +54,7 @@ func TestExecutorWithMockData(t *testing.T) {
 		ID:       1,
 		Name:     "节点1",
 		Kind:     "node",
-		Address:  "192.168.1.5",
+		Address:  "192.168.1.8",
 		Username: "xielei",
 		Password: "j3391111!",
 		Port:     22,
@@ -81,17 +80,10 @@ func TestExecutorWithMockData(t *testing.T) {
 	}
 
 	// 执行诊断
-	evtChan, err := executor.Execute(ctx, book, target, question, false)
+	evtChan, err := executor.Execute(ctx, book, target, question, true)
 	if err != nil {
 		t.Fatalf("执行失败: %v", err)
 	}
-	var lastEvt execute.ExecuteEvent
-	for evt := range evtChan {
-		lastEvt = evt
-		bytes, _ := json.Marshal(evt)
-		t.Logf("事件: %s", bytes)
-	}
-
-	t.Log(lastEvt.Message)
+	executor.GetReport(evtChan, true)
 
 }
