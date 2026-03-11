@@ -127,6 +127,7 @@ func newGenerateBookCmd() *cobra.Command {
 	cmd.Flags().String("playbook", "", "playbook名称(必填)")
 	cmd.Flags().String("name", "", "诊断方案名称(必填)")
 	cmd.Flags().String("desc", "", "诊断方案描述(必填)")
+	cmd.Flags().Bool("show", false, "是否显示模型详细输出信息")
 
 	// 设置为必填参数
 	_ = cmd.MarkFlagRequired("playbook")
@@ -138,6 +139,7 @@ func newGenerateBookCmd() *cobra.Command {
 func runGenerateBook(cmd *cobra.Command, args []string) error {
 	playbookName, err := cmd.Flags().GetString("playbook")
 	name, err := cmd.Flags().GetString("name")
+	showDetails, _ := cmd.Flags().GetBool("show")
 
 	if err != nil {
 		return fmt.Errorf("获取playbook名称失败: %w", err)
@@ -169,7 +171,7 @@ func runGenerateBook(cmd *cobra.Command, args []string) error {
 	}
 
 	// 生成并保存诊断方案
-	genbook, err := generator.GenerateAndSave(context.Background(), req)
+	genbook, err := generator.GenerateAndSave(context.Background(), req, showDetails)
 	if err != nil {
 		return fmt.Errorf("生成诊断方案失败: %w", err)
 	}

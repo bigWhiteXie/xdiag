@@ -7,6 +7,7 @@ import (
 	"time"
 
 	itool "github.com/bigWhiteXie/xdiag/internal/tool"
+	"github.com/bigWhiteXie/xdiag/pkg/formatter"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -39,13 +40,13 @@ func NewGenerator(llmClient model.ToolCallingChatModel, playbooksDir string) *Ge
 						Name:        "name",
 						Type:        "string",
 						Description: "playbook名称",
-						Required:    true,
+						Required:    false,
 					},
 					{
 						Name:        "desc",
 						Type:        "string",
 						Description: "playbook描述",
-						Required:    true,
+						Required:    false,
 					},
 					{
 						Name:        "required_tags",
@@ -116,7 +117,7 @@ type GeneratedContent struct {
 }
 
 // GenerateAndSave 根据用户描述生成book并落盘
-func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest) (*Book, error) {
+func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest, showDetails bool) (*Book, error) {
 	// 先检查playbook是否存在
 	playbookExists := g.repo.PlaybookExists(req.PlaybookName)
 
@@ -136,7 +137,7 @@ func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest
 	var content *GeneratedContent
 	var lastErr error
 	for attempt := 0; attempt < g.maxRetries; attempt++ {
-		content, lastErr = g.callAIWithRetry(ctx, prompt, attempt)
+		content, lastErr = g.callAIWithRetry(ctx, prompt, attempt, showDetails)
 		if lastErr == nil {
 			break
 		}
@@ -199,7 +200,10 @@ Playbook名称: %s
 }
 
 // callAIWithRetry 调用AI并处理工具调用
-func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt int) (*GeneratedContent, error) {
+func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt int, showDetails bool) (*GeneratedContent, error) {
+	// 创建格式化器
+	agentFormatter := formatter.NewAgentFormatter(showDetails)
+
 	// 构建消息
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
@@ -214,14 +218,25 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 	// 最多循环5次，等待AI调用工具
 	maxRounds := 5
 	for round := 0; round < maxRounds; round++ {
+		// 格式化 LLM 调用
+		if round == 0 {
+			agentFormatter.FormatLLMCall(prompt)
+		}
+
 		// 调用AI，传入工具
 		resp, err := g.llmClient.Generate(ctx, messages, model.WithTools([]*schema.ToolInfo{toolInfo}))
 		if err != nil {
 			return nil, fmt.Errorf("AI调用失败: %w", err)
 		}
 
+		// 格式化 LLM 响应
+		agentFormatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
+
 		// 检查是否有工具调用
 		if len(resp.ToolCalls) == 0 {
+			// 格式化思考过程
+			agentFormatter.FormatThinking(resp.Content)
+
 			// 如果没有工具调用，将AI的思考加入上下文继续循环
 			if round < maxRounds-1 {
 				// 添加AI的响应到消息历史
@@ -248,12 +263,18 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 				attempt+1, g.maxRetries)
 		}
 
+		// 格式化工具调用
+		agentFormatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
+
 		// 执行工具调用
 		toolResult, err := g.structOutputTool.InvokableRun(ctx, toolCall.Function.Arguments)
 		if err != nil {
 			return nil, fmt.Errorf("工具执行失败(尝试%d/%d): %w",
 				attempt+1, g.maxRetries, err)
 		}
+
+		// 格式化工具结果
+		agentFormatter.FormatToolResult(toolResult)
 
 		// 解析工具输出
 		var toolOutput itool.StructuredOutputOutput
@@ -264,8 +285,11 @@ func (g *Generator) callAIWithRetry(ctx context.Context, prompt string, attempt 
 
 		// 检查工具调用状态
 		if toolOutput.Status != 1 {
-			return nil, fmt.Errorf("工具调用失败(尝试%d/%d): %s",
-				attempt+1, g.maxRetries, toolOutput.Message)
+			// 工具调用失败，将错误信息反馈给模型
+			messages = append(messages,
+				schema.AssistantMessage(resp.Content, resp.ToolCalls),
+				schema.ToolMessage(toolResult, toolCall.ID))
+			continue
 		}
 
 		// 将工具输出转换为 GeneratedContent
