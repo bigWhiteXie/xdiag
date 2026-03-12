@@ -2,7 +2,6 @@ package execute
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
@@ -76,8 +75,39 @@ type ExecuteEvent struct {
 
 // Executor Book执行器
 type Executor struct {
-	recAgent *adk.ChatModelAgent
-	graph    compose.Runnable[*ExecuteState, *ExecuteState]
+	recAgent     *adk.ChatModelAgent
+	graph        compose.Runnable[*ExecuteState, *ExecuteState]
+	seqParser    schema.MessageParser[StepResult] // 普通步骤结果解析器
+	branchParser schema.MessageParser[StepResult] // 分支步骤结果解析器
+}
+
+// cleanJSONContent 清理消息内容，提取纯 JSON
+func cleanJSONContent(content string) string {
+	// 移除 <think> 标签及其内容
+	for {
+		startIdx := strings.Index(content, "<think>")
+		if startIdx == -1 {
+			break
+		}
+		endIdx := strings.Index(content[startIdx:], "</think>")
+		if endIdx == -1 {
+			break
+		}
+		content = content[:startIdx] + content[startIdx+endIdx+8:]
+	}
+
+	// 查找第一个 { 和最后一个 }
+	startIdx := strings.Index(content, "{")
+	if startIdx == -1 {
+		return content
+	}
+
+	endIdx := strings.LastIndex(content, "}")
+	if endIdx == -1 || endIdx < startIdx {
+		return content
+	}
+
+	return strings.TrimSpace(content[startIdx : endIdx+1])
 }
 
 // NewExecutor 创建新的执行器
@@ -102,8 +132,19 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 		return nil, fmt.Errorf("创建agent失败: %w", err)
 	}
 
+	// 创建 JSON 解析器 - 从消息内容中解析
+	seqParser := schema.NewMessageJSONParser[StepResult](&schema.MessageJSONParseConfig{
+		ParseFrom: schema.MessageParseFromContent,
+	})
+
+	branchParser := schema.NewMessageJSONParser[StepResult](&schema.MessageJSONParseConfig{
+		ParseFrom: schema.MessageParseFromContent,
+	})
+
 	executor := &Executor{
-		recAgent: agent,
+		recAgent:     agent,
+		seqParser:    seqParser,
+		branchParser: branchParser,
 	}
 
 	// 构建 Graph
@@ -410,8 +451,11 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		return state, nil
 	}
 
-	// 解析结果 - 从工具调用中获取
-	result, err := e.extractResultFromMessage(lastMessage)
+	// 清理消息内容，移除 <think> 等标签
+	lastMessage.Content = cleanJSONContent(lastMessage.Content)
+
+	// 解析结果 - 使用 MessageJSONParser
+	result, err := e.seqParser.Parse(ctx, lastMessage)
 	if err != nil {
 		state.Error = fmt.Sprintf("解析结果失败: %v", err)
 		state.RetryCount++
@@ -430,7 +474,7 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		// 步骤完成
 		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 			Step:   currentStep,
-			Result: *result,
+			Result: result,
 		})
 		currentContext.CurrentIndex++
 		state.RetryCount = 0
@@ -441,7 +485,7 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 			state.EventChan <- ExecuteEvent{
 				Type:   "step_complete",
 				Step:   &currentStep,
-				Result: result,
+				Result: &result,
 			}
 		}
 	} else {
@@ -571,8 +615,11 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		return state, nil
 	}
 
-	// 解析结果 - 从工具调用中获取
-	result, err := e.extractResultFromMessage(lastMessage)
+	// 清理消息内容，移除 <think> 等标签
+	lastMessage.Content = cleanJSONContent(lastMessage.Content)
+
+	// 解析结果 - 使用 MessageJSONParser
+	result, err := e.branchParser.Parse(ctx, lastMessage)
 	if err != nil {
 		state.Error = fmt.Sprintf("解析结果失败: %v", err)
 		state.RetryCount++
@@ -591,7 +638,7 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		// 步骤完成
 		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 			Step:   currentStep,
-			Result: *result,
+			Result: result,
 		})
 		currentContext.CurrentIndex++
 		state.RetryCount = 0
@@ -602,7 +649,7 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 			state.EventChan <- ExecuteEvent{
 				Type:   "step_complete",
 				Step:   &currentStep,
-				Result: result,
+				Result: &result,
 			}
 		}
 		return state, nil
@@ -612,14 +659,14 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 	selectedCase := currentStep.Cases[result.SelectedCase]
 	state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 		Step:   currentStep,
-		Result: *result,
+		Result: result,
 	})
 
 	if state.EventChan != nil {
 		state.EventChan <- ExecuteEvent{
 			Type:    "branch_select",
 			Step:    &currentStep,
-			Result:  result,
+			Result:  &result,
 			Message: fmt.Sprintf("选择分支: %s", selectedCase.Case),
 		}
 	}
@@ -645,44 +692,6 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 // finishNode 完成节点
 func (e *Executor) finishNode(ctx context.Context, state *ExecuteState) (*ExecuteState, error) {
 	return state, nil
-}
-
-// extractResultFromMessage 从消息中提取结构化输出结果
-func (e *Executor) extractResultFromMessage(msg *schema.Message) (*StepResult, error) {
-	// 从消息内容中提取 <output> 标签内的 JSON
-	content := msg.Content
-
-	// 查找 <output> 标签
-	startTag := "<output>"
-	endTag := "</output>"
-
-	startIdx := strings.Index(content, startTag)
-	if startIdx == -1 {
-		return nil, fmt.Errorf("未找到 <output> 标签")
-	}
-
-	endIdx := strings.Index(content[startIdx:], endTag)
-	if endIdx == -1 {
-		return nil, fmt.Errorf("未找到 </output> 结束标签")
-	}
-
-	// 提取 JSON 内容
-	jsonStr := content[startIdx+len(startTag) : startIdx+endIdx]
-	jsonStr = strings.TrimSpace(jsonStr)
-
-	// 清理可能的 markdown 代码块标记
-	jsonStr = strings.TrimPrefix(jsonStr, "```json")
-	jsonStr = strings.TrimPrefix(jsonStr, "```")
-	jsonStr = strings.TrimSuffix(jsonStr, "```")
-	jsonStr = strings.TrimSpace(jsonStr)
-
-	// 解析 JSON
-	var result StepResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, fmt.Errorf("解析 JSON 失败: %w, 原始内容: %s", err, jsonStr)
-	}
-
-	return &result, nil
 }
 
 // renderPrompt 渲染提示词模板（用于seq类型步骤）
@@ -714,21 +723,17 @@ func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) 
 {{end}}
 {{end}}
 
-请执行当前步骤，并将结果以 JSON 格式输出在 <output></output> 标签内。
+请执行当前步骤，并将结果以 JSON 格式直接输出（不需要 <output> 标签）。
 
 JSON 格式要求：
 {
-  "status": 1,  // 0表示未完成，1表示已完成
+  "status": 1,
   "result": "步骤执行中发现的信息、执行操作的结果等"
 }
 
-示例输出：
-<output>
-{
-  "status": 1,
-  "result": "检查完成，发现端口8080正在监听"
-}
-</output>`
+注意：
+- status: 0表示未完成，1表示已完成
+- result: 必须包含步骤执行的详细信息`
 
 	t, err := template.New("prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -789,23 +794,19 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 {{end}}
 {{end}}
 
-请根据当前情况和已执行步骤的结果，选择最合适的分支，并将结果以 JSON 格式输出在 <output></output> 标签内。
+请根据当前情况和已执行步骤的结果，选择最合适的分支，并将结果以 JSON 格式直接输出。
 
 JSON 格式要求：
 {
-  "status": 1,  // 0表示未完成，1表示已完成
-  "result": "分支选择的原因和依据",
-  "selected_case": 0  // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
-}
-
-示例输出：
-<output>
-{
   "status": 1,
-  "result": "根据端口检查结果，发现8080端口正在监听，选择服务运行分支",
+  "result": "分支选择的原因和依据",
   "selected_case": 0
 }
-</output>`
+
+注意：
+- status: 0表示未完成，1表示已完成
+- result: 必须说明选择该分支的原因
+- selected_case: 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
 
 	t, err := template.New("branch_prompt").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -875,32 +876,30 @@ func getAgentInstruction() string {
 1. 仔细阅读当前需要执行的步骤描述
 2. 根据步骤类型和描述，使用可用的工具执行相应的操作
 3. 收集执行过程中的信息和结果
-4. 将结果以 JSON 格式输出在 <output></output> 标签内
+4. 将结果以 JSON 格式直接输出
 
 # 输出格式
-必须将结果包裹在 <output></output> 标签内，格式如下：
+**重要：直接输出 JSON，不要添加任何思考过程、标签或其他文本。**
 
-对于普通步骤：
-<output>
+对于普通步骤，直接输出：
 {
   "status": 1,
   "result": "步骤执行的详细结果"
 }
-</output>
 
-对于分支选择步骤：
-<output>
+对于分支选择步骤，直接输出：
 {
   "status": 1,
   "result": "分支选择的原因",
   "selected_case": 0
 }
-</output>
 
 # 注意事项
+- 不要使用 <think>、<output> 或任何其他标签
+- 不要在 JSON 前后添加任何说明文字
+- 直接以 { 开始，以 } 结束
 - status为1表示步骤已完成，为0表示未完成
 - result字段应包含详细的执行信息，包括发现的问题、执行的操作、获取的关键数据等
-- 如果步骤未完成，在result中说明原因和已获取的信息
 - 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
 - 必须确保输出的 JSON 格式正确，可以被正常解析`
 }

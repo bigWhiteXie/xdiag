@@ -54,7 +54,7 @@ func TestExecutorWithMockData(t *testing.T) {
 		ID:       1,
 		Name:     "节点1",
 		Kind:     "node",
-		Address:  "192.168.1.8",
+		Address:  "10.128.44.124",
 		Username: "xielei",
 		Password: "j3391111!",
 		Port:     22,
