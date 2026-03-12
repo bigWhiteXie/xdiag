@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	eino_openai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -44,11 +45,20 @@ func NewClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChat
 
 // createOpenAIClient 创建 OpenAI 客户端或其他兼容 OpenAI API 的服务
 func createOpenAIClient(ctx context.Context, config *ClientConfig) (model.ToolCallingChatModel, error) {
+	// 创建自定义 HTTP 客户端，将 API key 添加到 Authorization 头
+	httpClient := &http.Client{
+		Transport: &authTransport{
+			apiKey: config.APIKey,
+			base:   http.DefaultTransport,
+		},
+	}
+
 	// 使用 Eino 框架创建 OpenAI 客户端
 	client, err := eino_openai.NewChatModel(ctx, &eino_openai.ChatModelConfig{
-		BaseURL: config.BaseURL,
-		Model:   config.ModelName,
-		APIKey:  config.APIKey,
+		BaseURL:    config.BaseURL,
+		Model:      config.ModelName,
+		APIKey:     config.APIKey,
+		HTTPClient: httpClient,
 	})
 
 	if err != nil {
@@ -56,6 +66,20 @@ func createOpenAIClient(ctx context.Context, config *ClientConfig) (model.ToolCa
 	}
 
 	return client, nil
+}
+
+// authTransport 是一个自定义的 HTTP Transport，用于在请求头中添加 Authorization
+type authTransport struct {
+	apiKey string
+	base   http.RoundTripper
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// 克隆请求以避免修改原始请求
+	req = req.Clone(req.Context())
+	// 将 API key 添加到 Authorization 头
+	req.Header.Set("Authorization", t.apiKey)
+	return t.base.RoundTrip(req)
 }
 
 // createAnthropicClient 创建 Anthropic 客户端

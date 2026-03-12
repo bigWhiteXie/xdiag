@@ -24,6 +24,7 @@ func init() {
 	playbookCmd.AddCommand(newListPlaybookCmd())
 	playbookCmd.AddCommand(newShowPlaybookCmd())
 	playbookCmd.AddCommand(newGenerateBookCmd())
+	playbookCmd.AddCommand(newUpdatePlaybookCmd())
 }
 
 func newListPlaybookCmd() *cobra.Command {

@@ -184,12 +184,12 @@ func (g *Generator) GenerateAndSave(ctx context.Context, req GenerateBookRequest
 
 	// 构建完整的book和ref对象
 	book := &Book{
-		Name:  req.Name,
+		Name:  bookAndRef.Name,
 		Steps: bookAndRef.Steps,
 	}
 
 	ref := Ref{
-		Name: req.Name,
+		Name: bookAndRef.Name,
 		Desc: bookAndRef.Desc,
 		Log:  bookAndRef.Log,
 	}

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -155,7 +156,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	return string(jsonResult), nil
 }
 
-// copyFile 通过SFTP拷贝文件到远程节点
+// copyFile 通过SFTP拷贝文件到远程节点，失败时使用SSH session作为fallback
 func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPath, remotePath string) CopyToolOutput {
 	// 建立SSH连接
 	config := &ssh.ClientConfig{
@@ -188,12 +189,24 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	}
 	defer client.Close()
 
+	// 尝试使用SFTP传输
+	output := t.copyViaSFTP(client, localPath, remotePath, target.Address)
+	if output.Success {
+		return output
+	}
+
+	// SFTP失败，使用SSH session作为fallback
+	return t.copyViaSSH(client, localPath, remotePath, target.Address)
+}
+
+// copyViaSFTP 通过SFTP传输文件
+func (t *CopyTool) copyViaSFTP(client *ssh.Client, localPath, remotePath, address string) CopyToolOutput {
 	// 创建SFTP客户端
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
-			Error:   fmt.Sprintf("failed to create sftp client: %v", err),
+			Error:   fmt.Sprintf("sftp client creation failed: %v", err),
 		}
 	}
 	defer sftpClient.Close()
@@ -213,7 +226,7 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
-			Error:   fmt.Sprintf("failed to create remote file %s: %v", remotePath, err),
+			Error:   fmt.Sprintf("sftp create remote file failed: %v", err),
 		}
 	}
 	defer dstFile.Close()
@@ -223,13 +236,51 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
-			Error:   fmt.Sprintf("failed to copy file content: %v", err),
+			Error:   fmt.Sprintf("sftp copy failed: %v", err),
 		}
 	}
 
 	return CopyToolOutput{
 		Success: true,
-		Message: fmt.Sprintf("successfully copied %s to %s:%s", localPath, target.Address, remotePath),
+		Message: fmt.Sprintf("successfully copied %s to %s:%s via SFTP", localPath, address, remotePath),
+	}
+}
+
+// copyViaSSH 通过SSH session传输文件（fallback方案）
+func (t *CopyTool) copyViaSSH(client *ssh.Client, localPath, remotePath, address string) CopyToolOutput {
+	// 读取本地文件内容
+	content, err := os.ReadFile(localPath)
+	if err != nil {
+		return CopyToolOutput{
+			Success: false,
+			Error:   fmt.Sprintf("failed to read local file: %v", err),
+		}
+	}
+
+	// 创建SSH会话
+	session, err := client.NewSession()
+	if err != nil {
+		return CopyToolOutput{
+			Success: false,
+			Error:   fmt.Sprintf("failed to create ssh session: %v", err),
+		}
+	}
+	defer session.Close()
+
+	// 通过cat命令写入远程文件并设置可执行权限
+	cmd := fmt.Sprintf("cat > %s && chmod +x %s", remotePath, remotePath)
+	session.Stdin = bytes.NewReader(content)
+
+	if err := session.Run(cmd); err != nil {
+		return CopyToolOutput{
+			Success: false,
+			Error:   fmt.Sprintf("ssh session copy failed: %v", err),
+		}
+	}
+
+	return CopyToolOutput{
+		Success: true,
+		Message: fmt.Sprintf("successfully copied %s to %s:%s via SSH session (fallback)", localPath, address, remotePath),
 	}
 }
 
