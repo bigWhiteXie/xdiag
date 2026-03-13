@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -107,7 +108,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	// 构建本地脚本路径
 	configDir := config.GetConfigDir()
 	scriptPath := filepath.Join(configDir, "scripts", input.ScriptName)
-
+	log.Printf("local script:%s", scriptPath)
 	// 检查脚本文件是否存在
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		output := CopyToolOutput{
@@ -221,6 +222,9 @@ func (t *CopyTool) copyViaSFTP(client *ssh.Client, localPath, remotePath, addres
 	}
 	defer localFile.Close()
 
+	// 删除已存在的远程文件
+	_ = sftpClient.Remove(remotePath)
+
 	// 创建远程文件
 	dstFile, err := sftpClient.Create(remotePath)
 	if err != nil {
@@ -233,6 +237,7 @@ func (t *CopyTool) copyViaSFTP(client *ssh.Client, localPath, remotePath, addres
 
 	// 拷贝文件内容
 	_, err = io.Copy(dstFile, localFile)
+	log.Printf("sftp copy failed :%s", err)
 	if err != nil {
 		return CopyToolOutput{
 			Success: false,
@@ -272,6 +277,7 @@ func (t *CopyTool) copyViaSSH(client *ssh.Client, localPath, remotePath, address
 	session.Stdin = bytes.NewReader(content)
 
 	if err := session.Run(cmd); err != nil {
+		log.Printf("ssh copy failed:%s", err)
 		return CopyToolOutput{
 			Success: false,
 			Error:   fmt.Sprintf("ssh session copy failed: %v", err),
