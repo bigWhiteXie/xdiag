@@ -104,6 +104,22 @@ func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAge
 }
 
 func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, error) {
+	maxRetries := 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		targetId, err := a.run(ctx, question)
+		if err == nil {
+			return targetId, nil
+		}
+		lastErr = err
+		log.Printf("[route agent] attempt %d/%d failed: %v", i+1, maxRetries, err)
+	}
+
+	return 0, fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, error) {
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
 		Agent:           a.recAgent,
 		EnableStreaming: false,
