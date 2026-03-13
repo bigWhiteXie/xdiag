@@ -19,7 +19,37 @@ import (
 )
 
 const (
-	maxRetries = 3
+	maxRetries       = 3
+	eventChanBuffer  = 100
+	thinkTagStart    = "<think>"
+	thinkTagEnd      = "</think>"
+	thinkTagEndLen   = 8
+	statusIncomplete = 0
+	statusComplete   = 1
+	invalidCaseIndex = -1
+)
+
+// Event type constants
+const (
+	EventTypeStepStart       = "step_start"
+	EventTypeStepComplete    = "step_complete"
+	EventTypeStepError       = "step_error"
+	EventTypeBranchSelect    = "branch_select"
+	EventTypeComplete        = "complete"
+	EventTypeAgentThinking   = "agent_thinking"
+	EventTypeAgentToolCall   = "agent_tool_call"
+	EventTypeAgentToolResult = "agent_tool_result"
+)
+
+// Step kind constants
+const (
+	StepKindBranch = "branch"
+)
+
+// Graph node names
+const (
+	nodeExecuteStep = "execute_step"
+	nodeFinish      = "finish"
 )
 
 // ExecuteState 定义执行状态
@@ -85,15 +115,15 @@ type Executor struct {
 func cleanJSONContent(content string) string {
 	// 移除 <think> 标签及其内容
 	for {
-		startIdx := strings.Index(content, "<think>")
+		startIdx := strings.Index(content, thinkTagStart)
 		if startIdx == -1 {
 			break
 		}
-		endIdx := strings.Index(content[startIdx:], "</think>")
+		endIdx := strings.Index(content[startIdx:], thinkTagEnd)
 		if endIdx == -1 {
 			break
 		}
-		content = content[:startIdx] + content[startIdx+endIdx+8:]
+		content = content[:startIdx] + content[startIdx+endIdx+thinkTagEndLen:]
 	}
 
 	// 查找第一个 { 和最后一个 }
@@ -160,7 +190,7 @@ func NewExecutor(ctx context.Context) (*Executor, error) {
 // Execute 执行Book
 func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *targets.Target, question string, showDetails bool) (chan ExecuteEvent, error) {
 	// 创建事件通道
-	eventChan := make(chan ExecuteEvent, 100)
+	eventChan := make(chan ExecuteEvent, eventChanBuffer)
 
 	// 初始化状态
 	state := &ExecuteState{
@@ -189,7 +219,7 @@ func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *tar
 		finalState, err := e.graph.Invoke(ctx, state)
 		if err != nil {
 			eventChan <- ExecuteEvent{
-				Type:  "complete",
+				Type:  EventTypeComplete,
 				Error: fmt.Sprintf("执行失败: %v", err),
 			}
 			return
@@ -197,7 +227,7 @@ func (e *Executor) Execute(ctx context.Context, book *playbook.Book, target *tar
 
 		// 发送完成事件
 		eventChan <- ExecuteEvent{
-			Type:    "complete",
+			Type:    EventTypeComplete,
 			Message: e.generateReport(finalState),
 		}
 	}()
@@ -211,7 +241,7 @@ func (e *Executor) GetReport(ch chan ExecuteEvent, showDetails bool) string {
 
 	for event := range ch {
 		lastMsg = event
-		if event.Type == "complete" {
+		if event.Type == EventTypeComplete {
 			break
 		}
 
@@ -247,29 +277,27 @@ func (e *Executor) buildGraph() (compose.Runnable[*ExecuteState, *ExecuteState],
 	graph := compose.NewGraph[*ExecuteState, *ExecuteState]()
 
 	// 添加节点
-	err := graph.AddLambdaNode("execute_step", compose.InvokableLambda(e.executeStepNode))
-	if err != nil {
+	if err := graph.AddLambdaNode(nodeExecuteStep, compose.InvokableLambda(e.executeStepNode)); err != nil {
 		return nil, fmt.Errorf("添加execute_step节点失败: %w", err)
 	}
 
-	err = graph.AddLambdaNode("finish", compose.InvokableLambda(e.finishNode))
-	if err != nil {
+	if err := graph.AddLambdaNode(nodeFinish, compose.InvokableLambda(e.finishNode)); err != nil {
 		return nil, fmt.Errorf("添加finish节点失败: %w", err)
 	}
 
 	// 设置入口
-	graph.AddEdge(compose.START, "execute_step")
+	graph.AddEdge(compose.START, nodeExecuteStep)
 
 	// 添加分支逻辑
-	err = graph.AddBranch("execute_step", compose.NewGraphBranch(func(ctx context.Context, state *ExecuteState) (string, error) {
+	err := graph.AddBranch(nodeExecuteStep, compose.NewGraphBranch(func(ctx context.Context, state *ExecuteState) (string, error) {
 		// 检查是否有错误且超过重试次数
 		if state.Error != "" && state.RetryCount >= maxRetries {
-			return "finish", nil
+			return nodeFinish, nil
 		}
 
 		// 检查步骤栈是否为空
 		if len(state.StepStack) == 0 {
-			return "finish", nil
+			return nodeFinish, nil
 		}
 
 		// 获取当前栈顶
@@ -282,25 +310,25 @@ func (e *Executor) buildGraph() (compose.Runnable[*ExecuteState, *ExecuteState],
 
 			// 如果栈为空，说明所有步骤都已完成
 			if len(state.StepStack) == 0 {
-				return "finish", nil
+				return nodeFinish, nil
 			}
 
 			// 继续执行上一层的下一个步骤
-			return "execute_step", nil
+			return nodeExecuteStep, nil
 		}
 
 		// 继续执行下一步
-		return "execute_step", nil
+		return nodeExecuteStep, nil
 	}, map[string]bool{
-		"execute_step": true,
-		"finish":       true,
+		nodeExecuteStep: true,
+		nodeFinish:      true,
 	}))
 	if err != nil {
 		return nil, fmt.Errorf("添加分支失败: %w", err)
 	}
 
 	// finish -> END
-	graph.AddEdge("finish", compose.END)
+	graph.AddEdge(nodeFinish, compose.END)
 
 	// 编译graph
 	compiled, err := graph.Compile(context.Background())
@@ -329,20 +357,25 @@ func (e *Executor) executeStepNode(ctx context.Context, state *ExecuteState) (*E
 	currentStep := currentContext.Steps[currentContext.CurrentIndex]
 
 	// 发送步骤开始事件
-	if state.EventChan != nil {
-		state.EventChan <- ExecuteEvent{
-			Type:    "step_start",
-			Step:    &currentStep,
-			Message: fmt.Sprintf("开始执行步骤: %s", currentStep.Desc),
-		}
-	}
+	e.sendEvent(state, ExecuteEvent{
+		Type:    EventTypeStepStart,
+		Step:    &currentStep,
+		Message: fmt.Sprintf("开始执行步骤: %s", currentStep.Desc),
+	})
 
 	// 根据步骤类型处理
-	if currentStep.Kind == "branch" {
+	if currentStep.Kind == StepKindBranch {
 		return e.executeBranchStep(ctx, state, currentStep, currentContext)
 	}
 
 	return e.executeSeqStep(ctx, state, currentStep, currentContext)
+}
+
+// sendEvent 发送事件（如果通道存在）
+func (e *Executor) sendEvent(state *ExecuteState, event ExecuteEvent) {
+	if state.EventChan != nil {
+		state.EventChan <- event
+	}
 }
 
 // executeSeqStep 执行顺序步骤
@@ -350,16 +383,7 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 	// 渲染提示词模板
 	prompt, err := e.renderPrompt(state, currentStep)
 	if err != nil {
-		state.Error = fmt.Sprintf("渲染提示词失败: %v", err)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, fmt.Sprintf("渲染提示词失败: %v", err))
 	}
 
 	// 使用 ReAct Agent 执行步骤
@@ -378,77 +402,21 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		}
 
 		if event.Err != nil {
-			state.Error = fmt.Sprintf("agent执行错误: %v", event.Err)
-			state.RetryCount++
-			if state.EventChan != nil {
-				state.EventChan <- ExecuteEvent{
-					Type:  "step_error",
-					Step:  &currentStep,
-					Error: state.Error,
-				}
-			}
-			return state, nil
+			return e.handleStepError(state, currentStep, fmt.Sprintf("agent执行错误: %v", event.Err))
 		}
 
-		// 如果开启详细模式，输出agent的思考和工具调用过程
-		if state.ShowDetails && state.EventChan != nil {
-			if event.Output != nil && event.Output.MessageOutput != nil {
-				msg, err := event.Output.MessageOutput.GetMessage()
-				if err == nil {
-					// 输出思考内容
-					if msg.Role == schema.Assistant && msg.Content != "" {
-						state.EventChan <- ExecuteEvent{
-							Type:    "agent_thinking",
-							Step:    &currentStep,
-							Message: msg.Content,
-						}
-					}
-
-					// 输出工具调用
-					if len(msg.ToolCalls) > 0 {
-						for _, toolCall := range msg.ToolCalls {
-							state.EventChan <- ExecuteEvent{
-								Type:    "agent_tool_call",
-								Step:    &currentStep,
-								Message: fmt.Sprintf("调用工具: %s\n参数: %s", toolCall.Function.Name, toolCall.Function.Arguments),
-							}
-						}
-					}
-
-					// 输出工具执行结果（当 Role 为 Tool 时）
-					if msg.Role == schema.Tool && msg.Content != "" {
-						state.EventChan <- ExecuteEvent{
-							Type:    "agent_tool_result",
-							Step:    &currentStep,
-							Message: fmt.Sprintf("工具结果: %s", msg.Content),
-						}
-					}
-				}
-			}
-		}
-
+		// 处理agent输出事件
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			msg, err := event.Output.MessageOutput.GetMessage()
-			if err != nil {
-				continue
-			}
-			if msg.Role == schema.Assistant {
-				lastMessage = msg
+			if err == nil {
+				e.handleAgentMessage(state, currentStep, msg, &lastMessage)
 			}
 		}
 	}
 
+	// 解析最后一条消息的执行状态
 	if lastMessage == nil {
-		state.Error = "agent未返回响应"
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, "agent未返回响应")
 	}
 
 	// 清理消息内容，移除 <think> 等标签
@@ -457,20 +425,61 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 	// 解析结果 - 使用 MessageJSONParser
 	result, err := e.seqParser.Parse(ctx, lastMessage)
 	if err != nil {
-		state.Error = fmt.Sprintf("解析结果失败: %v", err)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败: %v", err))
 	}
 
 	// 处理结果
-	if result.Status == 1 {
+	return e.handleStepResult(state, currentStep, currentContext, result)
+}
+
+// handleStepError 处理步骤错误
+func (e *Executor) handleStepError(state *ExecuteState, currentStep playbook.Step, errMsg string) (*ExecuteState, error) {
+	state.Error = errMsg
+	state.RetryCount++
+	e.sendEvent(state, ExecuteEvent{
+		Type:  EventTypeStepError,
+		Step:  &currentStep,
+		Error: state.Error,
+	})
+	return state, nil
+}
+
+// handleAgentMessage 处理agent消息
+func (e *Executor) handleAgentMessage(state *ExecuteState, currentStep playbook.Step, msg *schema.Message, lastMessage **schema.Message) {
+	// 输出思考内容
+	if msg.Role == schema.Assistant && msg.Content != "" {
+		*lastMessage = msg
+		e.sendEvent(state, ExecuteEvent{
+			Type:    EventTypeAgentThinking,
+			Step:    &currentStep,
+			Message: msg.Content,
+		})
+	}
+
+	// 输出工具调用
+	if len(msg.ToolCalls) > 0 {
+		for _, toolCall := range msg.ToolCalls {
+			e.sendEvent(state, ExecuteEvent{
+				Type:    EventTypeAgentToolCall,
+				Step:    &currentStep,
+				Message: fmt.Sprintf("调用工具: %s\n参数: %s", toolCall.Function.Name, toolCall.Function.Arguments),
+			})
+		}
+	}
+
+	// 输出工具执行结果（当 Role 为 Tool 时）
+	if msg.Role == schema.Tool && msg.Content != "" {
+		e.sendEvent(state, ExecuteEvent{
+			Type:    EventTypeAgentToolResult,
+			Step:    &currentStep,
+			Message: fmt.Sprintf("工具结果: %s", msg.Content),
+		})
+	}
+}
+
+// handleStepResult 处理步骤结果
+func (e *Executor) handleStepResult(state *ExecuteState, currentStep playbook.Step, currentContext *StepContext, result StepResult) (*ExecuteState, error) {
+	if result.Status == statusComplete {
 		// 步骤完成
 		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
 			Step:   currentStep,
@@ -481,13 +490,11 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 		state.Error = ""
 		state.CurrentContext = ""
 
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:   "step_complete",
-				Step:   &currentStep,
-				Result: &result,
-			}
-		}
+		e.sendEvent(state, ExecuteEvent{
+			Type:   EventTypeStepComplete,
+			Step:   &currentStep,
+			Result: &result,
+		})
 	} else {
 		// 步骤未完成，设置上下文并重试
 		state.CurrentContext = result.Result
@@ -501,29 +508,18 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, currentStep playbook.Step, currentContext *StepContext) (*ExecuteState, error) {
 	if len(currentStep.Cases) == 0 {
 		state.Error = "branch步骤的cases不能为空"
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
+		e.sendEvent(state, ExecuteEvent{
+			Type:  EventTypeStepError,
+			Step:  &currentStep,
+			Error: state.Error,
+		})
 		return state, nil
 	}
 
 	// 渲染分支选择提示词
 	prompt, err := e.renderBranchPrompt(state, currentStep)
 	if err != nil {
-		state.Error = fmt.Sprintf("渲染分支提示词失败: %v", err)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, fmt.Sprintf("渲染分支提示词失败: %v", err))
 	}
 
 	// 使用 ReAct Agent 选择分支
@@ -542,52 +538,14 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		}
 
 		if event.Err != nil {
-			state.Error = fmt.Sprintf("agent执行错误: %v", event.Err)
-			state.RetryCount++
-			if state.EventChan != nil {
-				state.EventChan <- ExecuteEvent{
-					Type:  "step_error",
-					Step:  &currentStep,
-					Error: state.Error,
-				}
-			}
-			return state, nil
+			return e.handleStepError(state, currentStep, fmt.Sprintf("agent执行错误: %v", event.Err))
 		}
 
 		// 如果开启详细模式，输出agent的思考和工具调用过程
-		if state.ShowDetails && state.EventChan != nil {
-			if event.Output != nil && event.Output.MessageOutput != nil {
-				msg, err := event.Output.MessageOutput.GetMessage()
-				if err == nil {
-					// 输出思考内容
-					if msg.Role == schema.Assistant && msg.Content != "" {
-						state.EventChan <- ExecuteEvent{
-							Type:    "agent_thinking",
-							Step:    &currentStep,
-							Message: msg.Content,
-						}
-					}
-
-					// 输出工具调用
-					if len(msg.ToolCalls) > 0 {
-						for _, toolCall := range msg.ToolCalls {
-							state.EventChan <- ExecuteEvent{
-								Type:    "agent_tool_call",
-								Step:    &currentStep,
-								Message: fmt.Sprintf("调用工具: %s\n参数: %s", toolCall.Function.Name, toolCall.Function.Arguments),
-							}
-						}
-					}
-
-					// 输出工具执行结果（当 Role 为 Tool 时）
-					if msg.Role == schema.Tool && msg.Content != "" {
-						state.EventChan <- ExecuteEvent{
-							Type:    "agent_tool_result",
-							Step:    &currentStep,
-							Message: fmt.Sprintf("工具结果: %s", msg.Content),
-						}
-					}
-				}
+		if state.ShowDetails && event.Output != nil && event.Output.MessageOutput != nil {
+			msg, err := event.Output.MessageOutput.GetMessage()
+			if err == nil {
+				e.handleAgentMessage(state, currentStep, msg, &lastMessage)
 			}
 		}
 
@@ -603,16 +561,7 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 	}
 
 	if lastMessage == nil {
-		state.Error = "agent未返回响应"
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, "agent未返回响应")
 	}
 
 	// 清理消息内容，移除 <think> 等标签
@@ -621,38 +570,12 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 	// 解析结果 - 使用 MessageJSONParser
 	result, err := e.branchParser.Parse(ctx, lastMessage)
 	if err != nil {
-		state.Error = fmt.Sprintf("解析结果失败: %v", err)
-		state.RetryCount++
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:  "step_error",
-				Step:  &currentStep,
-				Error: state.Error,
-			}
-		}
-		return state, nil
+		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败: %v", err))
 	}
 
 	// 当所有分支都不满足条件时，跳到下一个步骤即可
 	if result.SelectedCase < 0 || result.SelectedCase >= len(currentStep.Cases) {
-		// 步骤完成
-		state.ExecutedSteps = append(state.ExecutedSteps, ExecutedStep{
-			Step:   currentStep,
-			Result: result,
-		})
-		currentContext.CurrentIndex++
-		state.RetryCount = 0
-		state.Error = ""
-		state.CurrentContext = ""
-
-		if state.EventChan != nil {
-			state.EventChan <- ExecuteEvent{
-				Type:   "step_complete",
-				Step:   &currentStep,
-				Result: &result,
-			}
-		}
-		return state, nil
+		return e.handleStepResult(state, currentStep, currentContext, result)
 	}
 
 	// 记录分支选择
@@ -662,14 +585,12 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 		Result: result,
 	})
 
-	if state.EventChan != nil {
-		state.EventChan <- ExecuteEvent{
-			Type:    "branch_select",
-			Step:    &currentStep,
-			Result:  &result,
-			Message: fmt.Sprintf("选择分支: %s", selectedCase.Case),
-		}
-	}
+	e.sendEvent(state, ExecuteEvent{
+		Type:    EventTypeBranchSelect,
+		Step:    &currentStep,
+		Result:  &result,
+		Message: fmt.Sprintf("选择分支: %s", selectedCase.Case),
+	})
 
 	// 移动到当前层级的下一个步骤
 	currentContext.CurrentIndex++
@@ -696,7 +617,7 @@ func (e *Executor) finishNode(ctx context.Context, state *ExecuteState) (*Execut
 
 // renderPrompt 渲染提示词模板（用于seq类型步骤）
 func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) (string, error) {
-	tmpl := `你是一个专业的系统诊断专家。请根据以下信息执行当前诊断步骤。
+	const tmpl = `你是一个专业的系统诊断专家。请根据以下信息执行当前诊断步骤。
 
 ## 当前环境
 - 目标名称: {{.Target.Name}}
@@ -735,14 +656,7 @@ JSON 格式要求：
 - status: 0表示未完成，1表示已完成
 - result: 必须包含步骤执行的详细信息`
 
-	t, err := template.New("prompt").Funcs(template.FuncMap{
-		"add": func(a, b int) int { return a + b },
-	}).Parse(tmpl)
-	if err != nil {
-		return "", err
-	}
-
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Target":         state.Target,
 		"Question":       state.Question,
 		"CurrentStep":    currentStep,
@@ -750,12 +664,7 @@ JSON 格式要求：
 		"ExecutedSteps":  state.ExecutedSteps,
 	}
 
-	var buf strings.Builder
-	if err := t.Execute(&buf, data); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
+	return e.executeTemplate("prompt", tmpl, data)
 }
 
 // renderBranchPrompt 渲染分支选择提示词模板
@@ -765,7 +674,7 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 		return "", fmt.Errorf("target 不能为 nil")
 	}
 
-	tmpl := `你是一个专业的系统诊断专家。请根据以下信息选择合适的诊断分支。若没有分支符合条件，则将selected_case设置为-1
+	const tmpl = `你是一个专业的系统诊断专家。请根据以下信息选择合适的诊断分支。若没有分支符合条件，则将selected_case设置为-1
 
 ## 当前环境
 {{with .Target}}
@@ -808,18 +717,23 @@ JSON 格式要求：
 - result: 必须说明选择该分支的原因
 - selected_case: 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
 
-	t, err := template.New("branch_prompt").Funcs(template.FuncMap{
-		"add": func(a, b int) int { return a + b },
-	}).Parse(tmpl)
-	if err != nil {
-		return "", err
-	}
-
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Target":        state.Target,
 		"Question":      state.Question,
 		"CurrentStep":   currentStep,
 		"ExecutedSteps": state.ExecutedSteps,
+	}
+
+	return e.executeTemplate("branch_prompt", tmpl, data)
+}
+
+// executeTemplate 执行模板渲染
+func (e *Executor) executeTemplate(name, tmpl string, data map[string]any) (string, error) {
+	t, err := template.New(name).Funcs(template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+	}).Parse(tmpl)
+	if err != nil {
+		return "", err
 	}
 
 	var buf strings.Builder
@@ -834,38 +748,59 @@ JSON 格式要求：
 func (e *Executor) generateReport(state *ExecuteState) string {
 	var sb strings.Builder
 
-	sb.WriteString("# 诊断报告\n\n")
+	// 基本信息
+	sb.WriteString("# 诊断报告\n\n## 基本信息\n\n")
+	e.writeBasicInfo(&sb, state)
 
-	sb.WriteString("## 基本信息\n\n")
-	sb.WriteString(fmt.Sprintf("- **诊断方案**: %s\n", state.Book.Name))
-	sb.WriteString(fmt.Sprintf("- **目标名称**: %s\n", state.Target.Name))
-	sb.WriteString(fmt.Sprintf("- **目标类型**: %s\n", state.Target.Kind))
-	sb.WriteString(fmt.Sprintf("- **目标地址**: %s:%d\n", state.Target.Address, state.Target.Port))
-	sb.WriteString(fmt.Sprintf("- **用户问题**: %s\n\n", state.Question))
+	// 执行状态
+	sb.WriteString("\n## 执行状态\n\n")
+	e.writeExecutionStatus(&sb, state)
 
-	if state.Error != "" {
-		sb.WriteString("## 执行状态\n\n")
-		sb.WriteString(fmt.Sprintf("**执行失败**: %s\n\n", state.Error))
-	} else {
-		sb.WriteString("## 执行状态\n\n")
-		sb.WriteString("**执行成功**\n\n")
-	}
+	// 执行详情
+	sb.WriteString("\n## 执行详情\n\n")
+	e.writeExecutionDetails(&sb, state)
 
-	sb.WriteString("## 执行详情\n\n")
-	for i, executed := range state.ExecutedSteps {
-		sb.WriteString(fmt.Sprintf("### 步骤 %d: %s\n\n", i+1, executed.Step.Desc))
-		sb.WriteString(fmt.Sprintf("- **类型**: %s\n", executed.Step.Kind))
-		sb.WriteString(fmt.Sprintf("- **结果**: %s\n\n", executed.Result.Result))
-	}
-
-	sb.WriteString("## 总结\n\n")
-	if state.Error != "" {
-		sb.WriteString(fmt.Sprintf("诊断过程中遇到错误，已完成 %d/%d 个步骤。\n", len(state.ExecutedSteps), len(state.Book.Steps)))
-	} else {
-		sb.WriteString(fmt.Sprintf("诊断成功完成，共执行 %d 个步骤。\n", len(state.ExecutedSteps)))
-	}
+	// 总结
+	sb.WriteString("\n## 总结\n\n")
+	e.writeSummary(&sb, state)
 
 	return sb.String()
+}
+
+// writeBasicInfo 写入基本信息
+func (e *Executor) writeBasicInfo(sb *strings.Builder, state *ExecuteState) {
+	fmt.Fprintf(sb, "- **诊断方案**: %s\n", state.Book.Name)
+	fmt.Fprintf(sb, "- **目标名称**: %s\n", state.Target.Name)
+	fmt.Fprintf(sb, "- **目标类型**: %s\n", state.Target.Kind)
+	fmt.Fprintf(sb, "- **目标地址**: %s:%d\n", state.Target.Address, state.Target.Port)
+	fmt.Fprintf(sb, "- **用户问题**: %s\n", state.Question)
+}
+
+// writeExecutionStatus 写入执行状态
+func (e *Executor) writeExecutionStatus(sb *strings.Builder, state *ExecuteState) {
+	if state.Error != "" {
+		fmt.Fprintf(sb, "**执行失败**: %s\n", state.Error)
+	} else {
+		sb.WriteString("**执行成功**\n")
+	}
+}
+
+// writeExecutionDetails 写入执行详情
+func (e *Executor) writeExecutionDetails(sb *strings.Builder, state *ExecuteState) {
+	for i, executed := range state.ExecutedSteps {
+		fmt.Fprintf(sb, "### 步骤 %d: %s\n\n", i+1, executed.Step.Desc)
+		fmt.Fprintf(sb, "- **类型**: %s\n", executed.Step.Kind)
+		fmt.Fprintf(sb, "- **结果**: %s\n\n", executed.Result.Result)
+	}
+}
+
+// writeSummary 写入总结
+func (e *Executor) writeSummary(sb *strings.Builder, state *ExecuteState) {
+	if state.Error != "" {
+		fmt.Fprintf(sb, "诊断过程中遇到错误，已完成 %d/%d 个步骤。\n", len(state.ExecutedSteps), len(state.Book.Steps))
+	} else {
+		fmt.Fprintf(sb, "诊断成功完成，共执行 %d 个步骤。\n", len(state.ExecutedSteps))
+	}
 }
 
 // getAgentInstruction 获取Agent指令

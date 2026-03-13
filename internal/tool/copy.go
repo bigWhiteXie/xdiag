@@ -26,7 +26,7 @@ const (
 
 参数说明:
 - ip: 目标节点IP地址(必选)
-- script_name: 脚本文件名(必选)
+- script_path: 脚本文件名(必选)
 - dest_path: 目标路径(可选，默认/root/)
 `
 )
@@ -34,7 +34,7 @@ const (
 // CopyToolInput 定义CopyTool的输入
 type CopyToolInput struct {
 	IP         string `json:"ip"`                  // 必选，目标节点IP
-	ScriptName string `json:"script_name"`         // 必选，脚本文件名
+	ScriptPath string `json:"script_path"`         // 必选，脚本文件名
 	DestPath   string `json:"dest_path,omitempty"` // 可选，目标路径，默认/root/
 }
 
@@ -96,7 +96,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	if input.IP == "" {
 		return "", fmt.Errorf("ip is required")
 	}
-	if input.ScriptName == "" {
+	if input.ScriptPath == "" {
 		return "", fmt.Errorf("script_name is required")
 	}
 
@@ -107,7 +107,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 
 	// 构建本地脚本路径
 	configDir := config.GetConfigDir()
-	scriptPath := filepath.Join(configDir, "scripts", input.ScriptName)
+	scriptPath := filepath.Join(configDir, "scripts", input.ScriptPath)
 	log.Printf("local script:%s", scriptPath)
 	// 检查脚本文件是否存在
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
