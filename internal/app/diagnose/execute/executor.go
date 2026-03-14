@@ -655,11 +655,15 @@ func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) 
 
 请执行当前步骤，并将结果以 JSON 格式直接输出（不需要 <output> 标签）。
 
-严格遵循以下 TypeScript interface 返回 JSON：
-export interface StepResult {
-  status: 0 | 1;  // 0表示未完成，1表示已完成
-  result: string; // 必须包含步骤执行的详细信息：发现的问题、执行的操作、获取的关键数据等
-}`
+JSON 格式要求：
+{
+  "status": 1,
+  "result": "步骤执行中发现的信息、执行操作的结果等"
+}
+
+注意：
+- status: 0表示未完成，1表示已完成
+- result: 必须包含步骤执行的详细信息`
 
 	data := map[string]any{
 		"Target":         state.Target,
@@ -710,12 +714,17 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 
 请根据当前情况和已执行步骤的结果，选择最合适的分支，并将结果以 JSON 格式直接输出。
 
-严格遵循以下 TypeScript interface 返回 JSON：
-export interface BranchResult {
-  status: 0 | 1;       // 0表示未完成，1表示已完成
-  result: string;      // 必须说明选择该分支的原因和依据
-  selected_case: number; // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
-}`
+JSON 格式要求：
+{
+  "status": 1,
+  "result": "分支选择的原因和依据",
+  "selected_case": 0
+}
+
+注意：
+- status: 0表示未完成，1表示已完成
+- result: 必须说明选择该分支的原因
+- selected_case: 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
 
 	data := map[string]any{
 		"Target":        state.Target,
@@ -816,24 +825,25 @@ func getAgentInstruction() string {
 # 输出格式
 **重要：直接输出 JSON，不要添加任何思考过程、标签或其他文本。**
 
-严格遵循以下 TypeScript interface 返回 JSON：
-
-对于普通步骤：
-export interface StepResult {
-  status: 0 | 1;  // 0表示未完成，1表示已完成
-  result: string; // 步骤执行的详细结果：发现的问题、执行的操作、获取的关键数据等
+对于普通步骤，直接输出：
+{
+  "status": 1,
+  "result": "步骤执行的详细结果"
 }
 
-对于分支选择步骤：
-export interface BranchResult {
-  status: 0 | 1;       // 0表示未完成，1表示已完成
-  result: string;      // 分支选择的原因和依据
-  selected_case: number; // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
+对于分支选择步骤，直接输出：
+{
+  "status": 1,
+  "result": "分支选择的原因",
+  "selected_case": 0
 }
 
 # 注意事项
 - 不要使用 <think>、<output> 或任何其他标签
 - 不要在 JSON 前后添加任何说明文字
 - 直接以 { 开始，以 } 结束
+- status为1表示步骤已完成，为0表示未完成
+- result字段应包含详细的执行信息，包括发现的问题、执行的操作、获取的关键数据等
+- 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
 - 必须确保输出的 JSON 格式正确，可以被正常解析`
 }

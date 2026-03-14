@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 	"github.com/bigWhiteXie/xdiag/internal/tool"
 	"github.com/bigWhiteXie/xdiag/pkg/formatter"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/components/model"
@@ -398,7 +400,9 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 		resp, err := m.chatModel.Generate(ctx, messages,
 			model.WithTools([]*schema.ToolInfo{toolInfo}))
 		if err != nil {
-			return state, fmt.Errorf("LLM调用失败: %w", err)
+			logger.Errorf("LLM调用失败: %w", err)
+			time.Sleep(1 * time.Second)
+			continue
 		}
 
 		// 格式化输出 LLM 响应

@@ -6,17 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/pkg/sftp"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -108,7 +109,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	// 构建本地脚本路径
 	configDir := config.GetConfigDir()
 	scriptPath := filepath.Join(configDir, "scripts", input.ScriptPath)
-	log.Printf("local script:%s", scriptPath)
+	logger.Debug("local script path", zap.String("path", scriptPath))
 	// 检查脚本文件是否存在
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		output := CopyToolOutput{
@@ -195,11 +196,11 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	if output.Success {
 		return output
 	}
-	log.Printf("fail to copy file by sftp,cause:%s", err)
+	logger.Warn("fail to copy file by sftp", zap.String("error", output.Error))
 	// SFTP失败，使用SSH session作为fallback
 	output = t.copyViaSSH(client, localPath, remotePath, target.Address)
 	if !output.Success {
-		log.Printf("fail to copy file by ssh, cause:%s", err)
+		logger.Error("fail to copy file by ssh", zap.String("error", output.Error))
 	}
 
 	return output
@@ -242,8 +243,8 @@ func (t *CopyTool) copyViaSFTP(client *ssh.Client, localPath, remotePath, addres
 
 	// 拷贝文件内容
 	_, err = io.Copy(dstFile, localFile)
-	log.Printf("sftp copy failed :%s", err)
 	if err != nil {
+		logger.Error("sftp copy failed", zap.Error(err))
 		return CopyToolOutput{
 			Success: false,
 			Error:   fmt.Sprintf("sftp copy failed: %v", err),

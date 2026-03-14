@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
+	"go.uber.org/zap"
 )
 
 func newUpdatePlaybookCmd() *cobra.Command {
@@ -79,7 +81,7 @@ func runUpdatePlaybook(cmd *cobra.Command, args []string) error {
 	// 清理临时目录
 	fmt.Printf("清理临时目录: %s\n", tmpDir)
 	if err := os.RemoveAll(tmpDir); err != nil {
-		fmt.Printf("警告: 清理临时目录失败: %v\n", err)
+		logger.Warn("清理临时目录失败", zap.Error(err))
 	}
 
 	fmt.Println("\n更新完成!")

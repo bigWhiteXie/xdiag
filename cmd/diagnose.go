@@ -6,6 +6,7 @@ import (
 	"path"
 
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 
 	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/execute"
 	"github.com/bigWhiteXie/xdiag/internal/app/diagnose/match"
@@ -15,6 +16,7 @@ import (
 	"github.com/bigWhiteXie/xdiag/internal/config"
 	"github.com/bigWhiteXie/xdiag/internal/llm"
 	"github.com/bigWhiteXie/xdiag/internal/svc"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 )
 
 var diagnoseCmd = &cobra.Command{
@@ -61,33 +63,41 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	// ========================定位目标========================
 	targetID, err := agent.Run(ctx, userDescription)
 	if err != nil {
+		logger.Error("路由目标失败", zap.Error(err))
 		return fmt.Errorf("路由目标失败: %w", err)
 	}
 
 	if targetID == 0 {
+		logger.Info("未找到匹配的目标")
 		fmt.Println("未找到匹配的目标")
 		return nil
 	}
 
 	Diagtarget, err := targetRepo.GetByID(ctx, targetID)
 	if err != nil {
+		logger.Error("获取目标具体信息失败", zap.Error(err))
 		return fmt.Errorf("获取目标具体信息失败: %w", err)
 	}
+	logger.Info("找到目标", zap.String("ip", Diagtarget.Address), zap.Int("port", Diagtarget.Port), zap.String("kind", Diagtarget.Kind), zap.String("tags", Diagtarget.Tags))
 	fmt.Printf("✅ 找到目标, ip:%s port:%d kind:%s tags:%s\n", Diagtarget.Address, Diagtarget.Port, Diagtarget.Kind, Diagtarget.Tags)
 	_, err = targets.TestConnectivity(ctx, Diagtarget)
 	if err != nil {
+		logger.Error("测试目标连通性失败", zap.Error(err))
 		return fmt.Errorf("测试目标连通性失败: %w", err)
 	}
 	// ========================匹配方案========================
 	matcher, err := match.NewMatcher(svc.GetServiceContext().BookRepo, svc.GetServiceContext().Model, showDetails)
 	if err != nil {
+		logger.Error("创建匹配器失败", zap.Error(err))
 		return fmt.Errorf("创建匹配器失败: %w", err)
 	}
 	matchResult, err := matcher.Match(ctx, Diagtarget, userDescription)
 	if err != nil {
+		logger.Error("匹配失败", zap.Error(err))
 		return fmt.Errorf("匹配失败: %w", err)
 	}
 	if !matchResult.Success {
+		logger.Warn("未匹配到playbook", zap.String("message", matchResult.Message))
 		fmt.Printf("未匹配到playbook, 具体信息: %s\n", matchResult.Message)
 	}
 
@@ -96,14 +106,17 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	// ========================执行方案========================
 	executor, err := execute.NewExecutor(ctx)
 	if err != nil {
+		logger.Error("创建方案执行器失败", zap.Error(err))
 		return fmt.Errorf("创建方案执行器失败:%s", err)
 	}
 	book, err := svc.GetServiceContext().BookRepo.GetBook(matchResult.Playbook.Name, matchResult.Ref.Name)
 	if err != nil {
+		logger.Error("获取诊断方案失败", zap.Error(err))
 		return fmt.Errorf("获取诊断方案失败:%s", err)
 	}
 	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription, showDetails)
 	if err != nil {
+		logger.Error("执行诊断失败", zap.Error(err))
 		return fmt.Errorf("执行诊断失败: %w", err)
 	}
 	report := executor.GetReport(evtChan, showDetails)

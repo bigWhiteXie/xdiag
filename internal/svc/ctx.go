@@ -4,8 +4,10 @@ import (
 	"github.com/bigWhiteXie/xdiag/internal/app/playbook"
 	"github.com/bigWhiteXie/xdiag/internal/app/targets"
 	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 
 	"github.com/cloudwego/eino/components/model"
+	"go.uber.org/zap"
 )
 
 var (
@@ -17,6 +19,7 @@ type ServiceContext struct {
 	TargetsRepo targets.Repo
 	BookRepo    playbook.Repo
 	Config      config.Config
+	Logger      *zap.Logger
 }
 
 func SetModel(model model.ToolCallingChatModel) {
@@ -33,6 +36,14 @@ func SetBookRepo(repo playbook.Repo) {
 
 func SetConfig(cfg config.Config) {
 	svcCtx.Config = cfg
+}
+
+func InitLogger(level string, development bool) error {
+	if err := logger.Init(level, development); err != nil {
+		return err
+	}
+	svcCtx.Logger = logger.GetLogger()
+	return nil
 }
 
 func GetServiceContext() *ServiceContext {

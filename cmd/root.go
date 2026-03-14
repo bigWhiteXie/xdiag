@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/bigWhiteXie/xdiag/internal/config"
+	"github.com/bigWhiteXie/xdiag/internal/svc"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -39,5 +40,16 @@ func initConfig() {
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		// 仅记录错误，不中断程序
+	}
+
+	// 初始化日志系统
+	logLevel := viper.GetString("log.level")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	development := viper.GetBool("log.development")
+
+	if err := svc.InitLogger(logLevel, development); err != nil {
+		// 日志初始化失败，使用默认配置
 	}
 }

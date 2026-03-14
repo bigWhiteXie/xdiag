@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/bigWhiteXie/xdiag/internal/svc"
 	innertool "github.com/bigWhiteXie/xdiag/internal/tool"
 	"github.com/bigWhiteXie/xdiag/pkg/formatter"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
+	"go.uber.org/zap"
 )
 
 const (
@@ -93,7 +94,7 @@ func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAge
 	})
 
 	if err != nil {
-		log.Fatal(fmt.Errorf("创建聊天模型失败: %w", err))
+		logger.Fatal("创建聊天模型失败", zap.Error(err))
 	}
 
 	return &RouteTargetAgent{
@@ -113,7 +114,7 @@ func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, erro
 			return targetId, nil
 		}
 		lastErr = err
-		log.Printf("[route agent] attempt %d/%d failed: %v", i+1, maxRetries, err)
+		logger.Warn("route agent attempt failed", zap.Int("attempt", i+1), zap.Int("maxRetries", maxRetries), zap.Error(err))
 	}
 
 	return 0, fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
@@ -171,7 +172,7 @@ func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, erro
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			msg, err := event.Output.MessageOutput.GetMessage()
 			if err != nil {
-				log.Printf("[route agent] failed to get message: %v", err)
+				logger.Warn("route agent failed to get message", zap.Error(err))
 				continue
 			}
 
@@ -180,7 +181,7 @@ func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, erro
 				// 尝试反序列化工具输出
 				var toolOutput innertool.StructuredOutputOutput
 				if err := json.Unmarshal([]byte(msg.Content), &toolOutput); err != nil {
-					log.Printf("[route agent] failed to parse tool output: %v", err)
+					logger.Warn("route agent failed to parse tool output", zap.Error(err))
 					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 工具调用失败: 输出格式错误 - %v", err))
 					continue
 				}
@@ -196,7 +197,7 @@ func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, erro
 				// 将 map 反序列化为 Answer 结构体
 				ans := &Answer{}
 				if err := utils.UnmarshalMap(toolOutput.Data, ans); err != nil {
-					log.Printf("[route agent] failed to unmarshal answer: %v", err)
+					logger.Warn("route agent failed to unmarshal answer", zap.Error(err))
 					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 数据反序列化失败: %v", err))
 					continue
 				}

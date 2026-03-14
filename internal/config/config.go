@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/bigWhiteXie/xdiag/internal/llm"
+	"github.com/bigWhiteXie/xdiag/pkg/logger"
 
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -49,7 +51,7 @@ func NewConfig() *Config {
 
 	// 确保配置目录存在
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		fmt.Printf("Failed to create config directory: %v\n", err)
+		logger.Error("Failed to create config directory", zap.Error(err))
 	}
 
 	// 确保playbooks目录存在
@@ -59,7 +61,7 @@ func NewConfig() *Config {
 	}
 
 	if err := os.MkdirAll(playbooksDir, 0755); err != nil {
-		fmt.Printf("Failed to create playbooks directory: %v\n", err)
+		logger.Error("Failed to create playbooks directory", zap.Error(err))
 	}
 
 	// 确保数据目录存在
@@ -69,7 +71,7 @@ func NewConfig() *Config {
 	}
 
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		fmt.Printf("Failed to create data directory: %v\n", err)
+		logger.Error("Failed to create data directory", zap.Error(err))
 	}
 
 	return &Config{
