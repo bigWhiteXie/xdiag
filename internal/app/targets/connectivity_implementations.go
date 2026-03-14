@@ -17,7 +17,7 @@ func (n *NodeConnectivityTester) Test(ctx context.Context, target *Target) (*Con
 	}
 
 	// 首先进行 ping 测试
-	pingResult, pingErr := n.pingTest(target.Address)
+	pingResult, pingErr := n.pingTest(target.Address, target.Port)
 	if pingErr != nil {
 		return result, fmt.Errorf(MessagePingFailed, pingErr)
 	}
@@ -40,10 +40,10 @@ func (n *NodeConnectivityTester) Test(ctx context.Context, target *Target) (*Con
 }
 
 // pingTest 执行 ping 测试
-func (n *NodeConnectivityTester) pingTest(address string) (string, error) {
+func (n *NodeConnectivityTester) pingTest(address string, port int) (string, error) {
 	// 在真实实现中，我们会执行 ping 命令
 	// 这里简化为连接到目标地址的常见端口
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", address, DefaultSSHPort), 5*time.Second)
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", address, port), 5*time.Second)
 	if err != nil {
 		return "", err
 	}

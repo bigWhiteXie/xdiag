@@ -70,8 +70,8 @@ func (t *CopyTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 				Type:     schema.String,
 				Required: true,
 			},
-			"script_name": {
-				Desc:     "脚本文件名",
+			"script_path": {
+				Desc:     "脚本路径，一般是用户声明的相对路径如blackbox-test/rulefilechecker这种",
 				Type:     schema.String,
 				Required: true,
 			},
@@ -97,7 +97,7 @@ func (t *CopyTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 		return "", fmt.Errorf("ip is required")
 	}
 	if input.ScriptPath == "" {
-		return "", fmt.Errorf("script_name is required")
+		return "", fmt.Errorf("script_path is required")
 	}
 
 	// 设置默认目标路径
@@ -195,9 +195,14 @@ func (t *CopyTool) copyFile(ctx context.Context, target *targets.Target, localPa
 	if output.Success {
 		return output
 	}
-
+	log.Printf("fail to copy file by sftp,cause:%s", err)
 	// SFTP失败，使用SSH session作为fallback
-	return t.copyViaSSH(client, localPath, remotePath, target.Address)
+	output = t.copyViaSSH(client, localPath, remotePath, target.Address)
+	if !output.Success {
+		log.Printf("fail to copy file by ssh, cause:%s", err)
+	}
+
+	return output
 }
 
 // copyViaSFTP 通过SFTP传输文件
@@ -277,7 +282,6 @@ func (t *CopyTool) copyViaSSH(client *ssh.Client, localPath, remotePath, address
 	session.Stdin = bytes.NewReader(content)
 
 	if err := session.Run(cmd); err != nil {
-		log.Printf("ssh copy failed:%s", err)
 		return CopyToolOutput{
 			Success: false,
 			Error:   fmt.Sprintf("ssh session copy failed: %v", err),

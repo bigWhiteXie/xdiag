@@ -16,6 +16,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"github.com/kaptinlin/jsonrepair"
 )
 
 const (
@@ -113,7 +114,7 @@ type Executor struct {
 
 // cleanJSONContent 清理消息内容，提取纯 JSON
 func cleanJSONContent(content string) string {
-	// 移除 <think> 标签及其内容
+	// 移除成对的 <think></think> 标签及其内容
 	for {
 		startIdx := strings.Index(content, thinkTagStart)
 		if startIdx == -1 {
@@ -121,10 +122,15 @@ func cleanJSONContent(content string) string {
 		}
 		endIdx := strings.Index(content[startIdx:], thinkTagEnd)
 		if endIdx == -1 {
-			break
+			// 如果没有找到结束标签，移除单独的开始标签
+			content = content[:startIdx] + content[startIdx+len(thinkTagStart):]
+			continue
 		}
 		content = content[:startIdx] + content[startIdx+endIdx+thinkTagEndLen:]
 	}
+
+	// 移除单独出现的 </think> 标签
+	content = strings.ReplaceAll(content, thinkTagEnd, "")
 
 	// 查找第一个 { 和最后一个 }
 	startIdx := strings.Index(content, "{")
@@ -421,8 +427,12 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, curr
 
 	// 清理消息内容，移除 <think> 等标签
 	lastMessage.Content = cleanJSONContent(lastMessage.Content)
-
+	repairdJson, err := jsonrepair.JSONRepair(lastMessage.Content)
+	if err != nil {
+		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败:%s, cause:%v", lastMessage.Content, err))
+	}
 	// 解析结果 - 使用 MessageJSONParser
+	lastMessage.Content = repairdJson
 	result, err := e.seqParser.Parse(ctx, lastMessage)
 	if err != nil {
 		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败: %v", err))
@@ -563,15 +573,14 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, c
 	if lastMessage == nil {
 		return e.handleStepError(state, currentStep, "agent未返回响应")
 	}
-
-	// 清理消息内容，移除 <think> 等标签
 	lastMessage.Content = cleanJSONContent(lastMessage.Content)
-
-	// 解析结果 - 使用 MessageJSONParser
-	result, err := e.branchParser.Parse(ctx, lastMessage)
+	repairdJson, err := jsonrepair.JSONRepair(lastMessage.Content)
 	if err != nil {
-		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败: %v", err))
+		return e.handleStepError(state, currentStep, fmt.Sprintf("解析结果失败:%s, cause:%v", lastMessage.Content, err))
 	}
+	// 解析结果 - 使用 MessageJSONParser
+	lastMessage.Content = repairdJson
+	result, err := e.seqParser.Parse(ctx, lastMessage)
 
 	// 当所有分支都不满足条件时，跳到下一个步骤即可
 	if result.SelectedCase < 0 || result.SelectedCase >= len(currentStep.Cases) {
@@ -646,15 +655,11 @@ func (e *Executor) renderPrompt(state *ExecuteState, currentStep playbook.Step) 
 
 请执行当前步骤，并将结果以 JSON 格式直接输出（不需要 <output> 标签）。
 
-JSON 格式要求：
-{
-  "status": 1,
-  "result": "步骤执行中发现的信息、执行操作的结果等"
-}
-
-注意：
-- status: 0表示未完成，1表示已完成
-- result: 必须包含步骤执行的详细信息`
+严格遵循以下 TypeScript interface 返回 JSON：
+export interface StepResult {
+  status: 0 | 1;  // 0表示未完成，1表示已完成
+  result: string; // 必须包含步骤执行的详细信息：发现的问题、执行的操作、获取的关键数据等
+}`
 
 	data := map[string]any{
 		"Target":         state.Target,
@@ -705,17 +710,12 @@ func (e *Executor) renderBranchPrompt(state *ExecuteState, currentStep playbook.
 
 请根据当前情况和已执行步骤的结果，选择最合适的分支，并将结果以 JSON 格式直接输出。
 
-JSON 格式要求：
-{
-  "status": 1,
-  "result": "分支选择的原因和依据",
-  "selected_case": 0
-}
-
-注意：
-- status: 0表示未完成，1表示已完成
-- result: 必须说明选择该分支的原因
-- selected_case: 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1`
+严格遵循以下 TypeScript interface 返回 JSON：
+export interface BranchResult {
+  status: 0 | 1;       // 0表示未完成，1表示已完成
+  result: string;      // 必须说明选择该分支的原因和依据
+  selected_case: number; // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
+}`
 
 	data := map[string]any{
 		"Target":        state.Target,
@@ -816,25 +816,24 @@ func getAgentInstruction() string {
 # 输出格式
 **重要：直接输出 JSON，不要添加任何思考过程、标签或其他文本。**
 
-对于普通步骤，直接输出：
-{
-  "status": 1,
-  "result": "步骤执行的详细结果"
+严格遵循以下 TypeScript interface 返回 JSON：
+
+对于普通步骤：
+export interface StepResult {
+  status: 0 | 1;  // 0表示未完成，1表示已完成
+  result: string; // 步骤执行的详细结果：发现的问题、执行的操作、获取的关键数据等
 }
 
-对于分支选择步骤，直接输出：
-{
-  "status": 1,
-  "result": "分支选择的原因",
-  "selected_case": 0
+对于分支选择步骤：
+export interface BranchResult {
+  status: 0 | 1;       // 0表示未完成，1表示已完成
+  result: string;      // 分支选择的原因和依据
+  selected_case: number; // 选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
 }
 
 # 注意事项
 - 不要使用 <think>、<output> 或任何其他标签
 - 不要在 JSON 前后添加任何说明文字
 - 直接以 { 开始，以 } 结束
-- status为1表示步骤已完成，为0表示未完成
-- result字段应包含详细的执行信息，包括发现的问题、执行的操作、获取的关键数据等
-- 对于分支选择步骤，需要设置 selected_case 字段为选中的分支索引（从0开始），若没有符合条件的分支则设置为-1
 - 必须确保输出的 JSON 格式正确，可以被正常解析`
 }
