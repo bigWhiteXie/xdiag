@@ -185,13 +185,13 @@ func (e *Executor) executeSeqStep(ctx context.Context, state *ExecuteState, step
 	}
 
 	// 解析结果
-	result, err := e.parser.parseFromToolCall(outputs, seqResultToolName)
+	result, err := e.parser.parseFromToolCall(outputs.lastMessage, seqResultToolName)
 	if err != nil {
-		// fallback: 从内容解析
-		result, err = e.parser.parseFromContent(outputs)
-		if err != nil {
-			return state.handleError(step, fmt.Sprintf("解析结果失败: %v", err)), nil
+		// 如果有文本输出，将其添加到上下文并重试
+		if outputs.textContent != "" {
+			return state.handleTextOutput(step, stepCtx, outputs.textContent), nil
 		}
+		return state.handleError(step, fmt.Sprintf("解析结果失败: %v", err)), nil
 	}
 
 	// 处理结果
@@ -216,13 +216,13 @@ func (e *Executor) executeBranchStep(ctx context.Context, state *ExecuteState, s
 	}
 
 	// 解析结果
-	result, err := e.parser.parseFromToolCall(outputs, branchResultToolName)
+	result, err := e.parser.parseFromToolCall(outputs.lastMessage, branchResultToolName)
 	if err != nil {
-		// fallback: 从内容解析
-		result, err = e.parser.parseFromContent(outputs)
-		if err != nil {
-			return state.handleError(step, fmt.Sprintf("解析结果失败: %v", err)), nil
+		// 如果有文本输出，将其添加到上下文并重试
+		if outputs.textContent != "" {
+			return state.handleTextOutput(step, stepCtx, outputs.textContent), nil
 		}
+		return state.handleError(step, fmt.Sprintf("解析结果失败: %v", err)), nil
 	}
 
 	// 处理分支选择
@@ -240,10 +240,10 @@ func (e *Executor) runAgentCollecting(ctx context.Context, prompt string, eventC
 		Agent:           e.recAgent,
 		EnableStreaming: false,
 	})
-
+	cctx, cancel := context.WithCancel(ctx)
 	outputs := newAgentOutputs(e.showDetails)
 
-	iter := runner.Query(ctx, prompt)
+	iter := runner.Query(cctx, prompt)
 	for {
 		event, ok := iter.Next()
 		if !ok {
@@ -259,11 +259,20 @@ func (e *Executor) runAgentCollecting(ctx context.Context, prompt string, eventC
 			if err != nil {
 				continue
 			}
+
 			outputs.addMessage(msg, eventChan, step)
+			expectToolName := seqResultToolName
+			if step.Kind == StepKindBranch {
+				expectToolName = branchResultToolName
+			}
+			if _, err := e.parser.parseFromToolCall(msg, expectToolName); err == nil {
+				cancel()
+				return outputs, nil
+			}
 		}
 	}
 
-	if outputs.lastMessage == nil {
+	if outputs.lastMessage == nil && outputs.textContent == "" {
 		return nil, fmt.Errorf("agent未返回响应")
 	}
 

@@ -30,44 +30,52 @@ func newResultParser() *resultParser {
 }
 
 // parseFromToolCall 从工具调用解析结果
-func (p *resultParser) parseFromToolCall(outputs *agentOutputs, expectedToolName string) (StepResult, error) {
-	if outputs.lastMessage == nil {
+func (p *resultParser) parseFromToolCall(message *schema.Message, expectedToolName string) (StepResult, error) {
+	if message == nil {
 		return StepResult{}, fmt.Errorf("没有可解析的消息")
 	}
 
 	// 检查是否有工具调用
-	if outputs.lastMessage.Role != schema.Tool {
+	if message.Role != schema.Tool {
 		return StepResult{SelectedCase: -1}, fmt.Errorf("没有找到结构化工具调用")
 	}
 
 	// 检查工具名称
-	toolName := outputs.lastMessage.ToolName
+	toolName := message.ToolName
 	if toolName != expectedToolName {
 		return StepResult{}, fmt.Errorf("工具名称不匹配，期望: %s, 实际: %s", expectedToolName, toolName)
 	}
 	res := StepResult{}
-	if err := json.Unmarshal([]byte(outputs.lastMessage.Content), &res); err != nil {
-		return StepResult{}, fmt.Errorf("解析工具调用结果失败: %v, 内容: %s", err, outputs.lastMessage.Content)
+	if err := json.Unmarshal([]byte(message.Content), &res); err != nil {
+		return StepResult{}, fmt.Errorf("解析工具调用结果失败: %v, 内容: %s", err, message.Content)
 	}
 
 	return res, nil
 }
 
-// parseFromContent 从消息内容解析结果（fallback）
-func (p *resultParser) parseFromContent(outputs *agentOutputs) (StepResult, error) {
-	if outputs.lastMessage == nil {
-		return StepResult{}, fmt.Errorf("没有可解析的消息")
+// parseFromTextContent 从文本内容解析结果（当模型返回文本而非工具调用时）
+func (p *resultParser) parseFromTextContent(outputs *agentOutputs) (StepResult, error) {
+	if outputs.textContent == "" {
+		return StepResult{}, fmt.Errorf("没有可解析的文本内容")
 	}
 
-	content := outputs.lastMessage.Content
-	content = cleanJSONContent(content)
+	content := cleanJSONContent(outputs.textContent)
 
 	repaired, err := jsonrepair.JSONRepair(content)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("JSON修复失败: %w", err)
 	}
 
-	// 更新消息内容并解析
-	outputs.lastMessage.Content = repaired
-	return p.contentParser.Parse(context.Background(), outputs.lastMessage)
+	// 创建临时消息用于解析
+	tmpMsg := &schema.Message{
+		Role:    schema.Assistant,
+		Content: repaired,
+	}
+
+	result, err := p.contentParser.Parse(context.Background(), tmpMsg)
+	if err != nil {
+		return StepResult{}, fmt.Errorf("从文本内容解析失败: %w", err)
+	}
+
+	return result, nil
 }

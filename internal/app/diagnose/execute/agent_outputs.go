@@ -9,6 +9,7 @@ import (
 type agentOutputs struct {
 	showDetails bool
 	lastMessage *schema.Message
+	textContent string // 收集模型的文本输出
 }
 
 // newAgentOutputs 创建新的agent输出收集器
@@ -25,6 +26,8 @@ func (o *agentOutputs) addMessage(msg *schema.Message, eventChan chan<- ExecuteE
 		if o.lastMessage == nil {
 			o.lastMessage = msg
 		}
+		// 收集文本内容用于后续处理
+		o.textContent += msg.Content
 		emitter.sendAgentThinking(eventChan, step, msg.Content)
 	}
 

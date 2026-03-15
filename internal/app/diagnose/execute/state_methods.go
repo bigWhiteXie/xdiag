@@ -107,6 +107,26 @@ func (s *ExecuteState) handleResult(step playbook.Step, stepCtx *StepContext, re
 	return s
 }
 
+// handleTextOutput 处理模型的文本输出（当模型返回文本而非工具调用时）
+func (s *ExecuteState) handleTextOutput(step playbook.Step, stepCtx *StepContext, textOutput string) *ExecuteState {
+	// 将文本输出添加到当前上下文中
+	if s.CurrentContext == "" {
+		s.CurrentContext = textOutput
+	} else {
+		s.CurrentContext = s.CurrentContext + "\n\n" + textOutput
+	}
+
+	// 增加重试次数，但不要立即失败
+	s.RetryCount++
+
+	if s.EventChan != nil {
+		emiter := &eventEmitter{}
+		emiter.sendAgentThinking(s.EventChan, step, textOutput)
+	}
+
+	return s
+}
+
 // handleBranchSelection 处理分支选择
 func (s *ExecuteState) handleBranchSelection(step playbook.Step, stepCtx *StepContext, result StepResult) *ExecuteState {
 	// 当所有分支都不满足条件时，跳到下一个步骤

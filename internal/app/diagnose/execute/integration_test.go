@@ -31,7 +31,7 @@ func TestExecutorWithMockData(t *testing.T) {
 						Steps: []playbook.Step{
 							{
 								Kind: "seq",
-								Desc: "通过du命令找到挂载在该磁盘路径下的占用磁盘最大的前5个目录，并展示它们的大小",
+								Desc: "通过ls -la / | head -20 找到相关目录",
 							},
 						},
 					},

@@ -2,16 +2,12 @@ package route
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/bigWhiteXie/xdiag/internal/svc"
 	innertool "github.com/bigWhiteXie/xdiag/internal/tool"
-	"github.com/bigWhiteXie/xdiag/pkg/formatter"
 	"github.com/bigWhiteXie/xdiag/pkg/logger"
-	"github.com/bigWhiteXie/xdiag/pkg/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -44,9 +40,10 @@ const (
 )
 
 type RouteTargetAgent struct {
-	recAgent         *adk.ChatModelAgent
-	executionHistory []string
-	formatter        *formatter.AgentFormatter
+	recAgent  *adk.ChatModelAgent
+	collector *agentOutputs
+	parser    *resultParser
+	history   *executionHistory
 }
 
 func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAgent, error) {
@@ -60,6 +57,7 @@ func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAge
 	// 创建结构化输出工具
 	structuredTool := innertool.NewStructuredOutputTool(innertool.StructuredOutputConfig{
 		Description: "当确定target后或无相关目标时，使用此工具输出结果",
+		WrapData:    true,
 		Fields: []innertool.FieldDefinition{
 			{
 				Name:        "status",
@@ -98,10 +96,16 @@ func NewTargetRouteAgent(ctx context.Context, showDetails bool) (*RouteTargetAge
 	}
 
 	return &RouteTargetAgent{
-		recAgent:         a,
-		executionHistory: make([]string, 0),
-		formatter:        formatter.NewAgentFormatter(showDetails),
+		recAgent: a,
+		parser:   newResultParser(),
+		history:  newExecutionHistory(),
 	}, nil
+}
+
+// buildFullQuestion 构建包含历史记录的完整问题
+func (a *RouteTargetAgent) buildFullQuestion(question string) string {
+	historyContext := a.history.buildContext()
+	return fmt.Sprintf(questionTemplate, question, historyContext)
 }
 
 func (a *RouteTargetAgent) Run(ctx context.Context, question string) (uint, error) {
@@ -125,21 +129,10 @@ func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, erro
 		Agent:           a.recAgent,
 		EnableStreaming: false,
 	})
+	ctxWithCanceld, cancel := context.WithCancel(ctx)
+	a.collector = newAgentOutputs(true)
 
-	type Answer struct {
-		Status   int  `json:"status"`
-		TargetId uint `json:"target_id"`
-	}
-
-	// 构建包含历史记录的问题
-	historyContext := ""
-	if len(a.executionHistory) > 0 {
-		historyContext = "# 历史执行记录\n" + strings.Join(a.executionHistory, "\n")
-	}
-	fullQuestion := fmt.Sprintf(questionTemplate, question, historyContext)
-
-	// 使用 Query 方法，它会自动处理整个 ReAct 循环
-	iter := runner.Query(ctx, fullQuestion)
+	iter := runner.Query(ctxWithCanceld, a.buildFullQuestion(question))
 
 	for {
 		event, ok := iter.Next()
@@ -147,73 +140,37 @@ func (a *RouteTargetAgent) run(ctx context.Context, question string) (uint, erro
 			break
 		}
 
-		// 处理错误
 		if event.Err != nil {
 			return 0, fmt.Errorf("agent error: %w", event.Err)
 		}
 
-		// 格式化输出
-		if event.Output != nil && event.Output.MessageOutput != nil {
-			msg, _ := event.Output.MessageOutput.GetMessage()
-
-			// 格式化 LLM 响应
-			if event.Output.MessageOutput.Role == "assistant" {
-				hasToolCall := len(msg.ToolCalls) > 0
-				a.formatter.FormatLLMResponse(msg.Content, hasToolCall)
-			}
-
-			// 格式化工具调用
-			if event.Output.MessageOutput.Role == "tool" {
-				a.formatter.FormatToolResult(msg.Content)
-			}
-		}
-
-		// 获取工具调用输出 - 从 MessageOutput 中提取
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			msg, err := event.Output.MessageOutput.GetMessage()
 			if err != nil {
-				logger.Warn("route agent failed to get message", zap.Error(err))
 				continue
 			}
-
-			// 检查是否是工具角色的消息
-			if event.Output.MessageOutput.Role == "tool" && event.Output.MessageOutput.ToolName == innertool.StructOutputToolName {
-				// 尝试反序列化工具输出
-				var toolOutput innertool.StructuredOutputOutput
-				if err := json.Unmarshal([]byte(msg.Content), &toolOutput); err != nil {
-					logger.Warn("route agent failed to parse tool output", zap.Error(err))
-					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 工具调用失败: 输出格式错误 - %v", err))
-					continue
-				}
-
-				// 检查工具调用是否成功
-				if toolOutput.Status != 1 {
-					// 记录失败原因，继续执行
-					a.executionHistory = append(a.executionHistory,
-						fmt.Sprintf("- 工具调用失败: %s, 缺少字段: %v", toolOutput.Message, toolOutput.MissingFields))
-					continue
-				}
-
-				// 将 map 反序列化为 Answer 结构体
-				ans := &Answer{}
-				if err := utils.UnmarshalMap(toolOutput.Data, ans); err != nil {
-					logger.Warn("route agent failed to unmarshal answer", zap.Error(err))
-					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 数据反序列化失败: %v", err))
-					continue
-				}
-
-				// 成功获取结果
-				if ans.Status == 1 {
-					a.executionHistory = append(a.executionHistory, fmt.Sprintf("- 成功找到目标: target_id=%d", ans.TargetId))
-					return ans.TargetId, nil
-				} else if ans.Status == 2 {
-					a.executionHistory = append(a.executionHistory, "- 未找到相关目标")
-					return 0, nil
-				}
+			// 判断是否是output工具调用，是则立马退出
+			a.collector.addMessage(msg)
+			if id, ok := a.collector.getTargetID(); ok {
+				cancel()
+				return id, nil
 			}
 		}
 	}
 
-	// 如果循环结束仍未找到结果
-	return 0, errors.New("agent completed without calling output_result tool")
+	// 解析结果
+	targetId, err := a.parser.parseFromToolCall(a.collector)
+	if err != nil {
+		// Fallback
+		a.history.addFailure(err.Error())
+		return 0, err
+	}
+
+	if targetId > 0 {
+		a.history.addSuccess(targetId)
+	} else {
+		a.history.addNotFound()
+	}
+
+	return targetId, nil
 }
