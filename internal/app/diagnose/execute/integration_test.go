@@ -74,16 +74,16 @@ func TestExecutorWithMockData(t *testing.T) {
 
 	question := "检查磁盘空间占用情况"
 	// 创建执行器
-	executor, err := execute.NewExecutor(ctx)
+	executor, err := execute.NewExecutor(ctx, true)
 	if err != nil {
 		t.Fatalf("创建执行器失败: %v", err)
 	}
 
 	// 执行诊断
-	evtChan, err := executor.Execute(ctx, book, target, question, true)
+	evtChan, err := executor.Execute(ctx, book, target, question)
 	if err != nil {
 		t.Fatalf("执行失败: %v", err)
 	}
-	executor.GetReport(evtChan, true)
+	executor.GetReport(evtChan)
 
 }

@@ -104,7 +104,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	fmt.Printf("✅ 匹配成功 方案:%s 描述:%s\n", matchResult.Ref.Name, matchResult.Ref.Desc)
 
 	// ========================执行方案========================
-	executor, err := execute.NewExecutor(ctx)
+	executor, err := execute.NewExecutor(ctx, showDetails)
 	if err != nil {
 		logger.Error("创建方案执行器失败", zap.Error(err))
 		return fmt.Errorf("创建方案执行器失败:%s", err)
@@ -114,12 +114,12 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 		logger.Error("获取诊断方案失败", zap.Error(err))
 		return fmt.Errorf("获取诊断方案失败:%s", err)
 	}
-	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription, showDetails)
+	evtChan, err := executor.Execute(ctx, book, Diagtarget, userDescription)
 	if err != nil {
 		logger.Error("执行诊断失败", zap.Error(err))
 		return fmt.Errorf("执行诊断失败: %w", err)
 	}
-	report := executor.GetReport(evtChan, showDetails)
+	report := executor.GetReport(evtChan)
 	fmt.Printf("诊断报告:\n%s", report)
 	return nil
 }

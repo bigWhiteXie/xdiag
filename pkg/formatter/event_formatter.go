@@ -146,7 +146,13 @@ func (f *EventFormatter) FormatEvent(eventType string, stepDesc string, result s
 	case "branch_select":
 		sb.WriteString(f.formatBranchSelect(message, result))
 	case "complete":
-		sb.WriteString(f.formatComplete(errMsg))
+		sb.WriteString(f.formatComplete(errMsg, message))
+	case "agent_thinking":
+		sb.WriteString(f.formatAgentThinking(message))
+	case "agent_tool_call":
+		sb.WriteString(f.formatAgentToolCall(message, result))
+	case "agent_tool_result":
+		sb.WriteString(f.formatAgentToolResult(message))
 	}
 
 	return sb.String()
@@ -209,7 +215,7 @@ func (f *EventFormatter) formatBranchSelect(message string, result string) strin
 }
 
 // formatComplete 格式化完成事件
-func (f *EventFormatter) formatComplete(errMsg string) string {
+func (f *EventFormatter) formatComplete(errMsg string, msg string) string {
 	var sb strings.Builder
 
 	if errMsg != "" {
@@ -225,6 +231,8 @@ func (f *EventFormatter) formatComplete(errMsg string) string {
 		sb.WriteString(successColor.Sprint("═══════════════════════════════════════════════════════════════════\n"))
 		sb.WriteString(successColor.Sprint("  执行完成\n"))
 		sb.WriteString(successColor.Sprint("═══════════════════════════════════════════════════════════════════\n"))
+		sb.WriteString(fmt.Sprintf("%s\n", msg))
+
 	}
 
 	return sb.String()
@@ -239,6 +247,56 @@ func (f *EventFormatter) formatResult(result string) string {
 		if line != "" {
 			sb.WriteString(fmt.Sprintf("  %s\n", line))
 		}
+	}
+
+	return sb.String()
+}
+
+// formatAgentThinking 格式化 Agent 思考事件
+func (f *EventFormatter) formatAgentThinking(content string) string {
+	var sb strings.Builder
+
+	thinkColor := color.New(color.FgYellow)
+	sb.WriteString(thinkColor.Sprint("💭 思考: "))
+	sb.WriteString(content)
+	sb.WriteString("\n")
+
+	return sb.String()
+}
+
+// formatAgentToolCall 格式化 Agent 工具调用事件
+func (f *EventFormatter) formatAgentToolCall(toolName string, args string) string {
+	var sb strings.Builder
+
+	toolColor := color.New(color.FgBlue)
+	sb.WriteString(toolColor.Sprint("🔧 工具调用: "))
+	sb.WriteString(toolName)
+	sb.WriteString("\n")
+
+	if args != "" {
+		argsColor := color.New(color.FgCyan)
+		sb.WriteString(argsColor.Sprint("   参数: "))
+		sb.WriteString(args)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// formatAgentToolResult 格式化 Agent 工具结果事件
+func (f *EventFormatter) formatAgentToolResult(result string) string {
+	var sb strings.Builder
+
+	resultColor := color.New(color.FgGreen)
+	sb.WriteString(resultColor.Sprint("   结果: "))
+
+	// 如果结果太长，截断显示
+	if len(result) > 200 {
+		sb.WriteString(result[:200])
+		sb.WriteString("...\n")
+	} else {
+		sb.WriteString(result)
+		sb.WriteString("\n")
 	}
 
 	return sb.String()

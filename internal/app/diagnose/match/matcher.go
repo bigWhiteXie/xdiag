@@ -255,19 +255,15 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 		resp, err := m.chatModel.Generate(ctx, messages,
 			model.WithTools([]*schema.ToolInfo{toolInfo}))
 		if err != nil {
-			return state, fmt.Errorf("LLM调用失败: %w", err)
+			return state, fmt.Errorf("LLM调用失败: %w, message: %s", err, utils.FormatMessages(messages))
 		}
 
 		// 格式化输出 LLM 响应
 		m.formatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
 
 		// 检查是否返回了tool call
-		if len(resp.ToolCalls) == 0 {
-			// 未进行工具调用，添加提示消息并重试
-			feedbackMsg := "你必须调用 output_result 工具来输出结果，请重新尝试。"
-			messages = append(messages,
-				schema.AssistantMessage(resp.Content, nil),
-				schema.UserMessage(feedbackMsg))
+		if ok, msgs := m.checkOutputTool(resp); !ok {
+			messages = append(messages, msgs...)
 			continue
 		}
 
@@ -290,7 +286,6 @@ func (m *Matcher) selectPlaybookNode(ctx context.Context, state *MatchState) (*M
 
 		// 检查工具调用状态
 		if output.Status != 1 {
-
 			return state, errors.New("未找到相关合适的playbook")
 		}
 
@@ -409,15 +404,10 @@ func (m *Matcher) selectRefNode(ctx context.Context, state *MatchState) (*MatchS
 		m.formatter.FormatLLMResponse(resp.Content, len(resp.ToolCalls) > 0)
 
 		// 检查是否返回了tool call
-		if len(resp.ToolCalls) == 0 {
-			// 未进行工具调用，添加提示消息并重试
-			feedbackMsg := "你必须调用 output_result 工具来输出结果，请重新尝试。"
-			messages = append(messages,
-				schema.AssistantMessage(resp.Content, nil),
-				schema.UserMessage(feedbackMsg))
+		if ok, msgs := m.checkOutputTool(resp); !ok {
+			messages = append(messages, msgs...)
 			continue
 		}
-
 		// 执行工具调用
 		toolCall := resp.ToolCalls[0]
 		m.formatter.FormatToolCall(toolCall.Function.Name, toolCall.Function.Arguments)
@@ -512,6 +502,21 @@ func (m *Matcher) buildPlaybooksDescription(playbooks []playbook.Playbook) strin
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+func (m *Matcher) checkOutputTool(resp *schema.Message) (bool, []*schema.Message) {
+	messages := make([]*schema.Message, 0)
+	if len(resp.ToolCalls) == 0 {
+		if strings.TrimSpace(resp.Content) != "" {
+			messages = append(messages, schema.AssistantMessage(resp.Content, nil))
+		}
+		// 未进行工具调用，添加提示消息并重试
+		feedbackMsg := "你必须调用 output_result 工具来输出结果，请重新尝试。"
+		messages = append(messages, schema.UserMessage(feedbackMsg))
+		return false, messages
+	}
+
+	return true, messages
 }
 
 // buildRefsDescription 构建refs的描述

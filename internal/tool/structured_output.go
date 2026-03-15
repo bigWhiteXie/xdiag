@@ -15,7 +15,7 @@ const (
 	structuredOutputBaseTemplate = `
 结构化数据生成工具，用于生成符合预定义字段的JSON格式数据。
 
-请严格按照以下字段要求生成JSON数据：
+请严格按照以下字段要求传入JSON数据：
 %s
 
 注意：
@@ -38,8 +38,10 @@ type FieldDefinition struct {
 
 // StructuredOutputConfig 配置结构化输出工具
 type StructuredOutputConfig struct {
+	Name        string            `json:"name"`        // 工具名称（可选，默认为output_result）
 	Description string            `json:"description"` // 工具用途描述
 	Fields      []FieldDefinition `json:"fields"`      // 字段定义列表
+	WrapData    bool              `json:"wrap_data"`   // 是否将结果包装在data字段中（默认true）
 }
 
 // StructuredOutputInput 工具输入
@@ -64,6 +66,10 @@ var _ tool.InvokableTool = (*StructuredOutputTool)(nil)
 
 // NewStructuredOutputTool 创建结构化输出工具
 func NewStructuredOutputTool(config StructuredOutputConfig) *StructuredOutputTool {
+	// 设置默认名称
+	if config.Name == "" {
+		config.Name = StructOutputToolName
+	}
 	return &StructuredOutputTool{
 		config: config,
 	}
@@ -90,11 +96,11 @@ func (t *StructuredOutputTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 	fullDesc := fmt.Sprintf(structuredOutputBaseTemplate, fieldsDesc)
 
 	if t.config.Description != "" {
-		fullDesc = t.config.Description + "\n\n" + fullDesc
+		fullDesc = t.config.Description + "\n\n" + fmt.Sprintf("使用场景:%s", fullDesc)
 	}
 
 	return &schema.ToolInfo{
-		Name:        StructOutputToolName,
+		Name:        t.config.Name,
 		Desc:        fullDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(params),
 	}, nil
@@ -168,32 +174,42 @@ func (t *StructuredOutputTool) InvokableRun(ctx context.Context, argumentsInJSON
 		}
 	}
 
-	// 构建输出
-	var output StructuredOutputOutput
-
+	// 如果缺少必填字段，返回错误
 	if len(missingFields) > 0 {
-		// 缺少必填字段
-		output = StructuredOutputOutput{
+		output := StructuredOutputOutput{
 			Status:        2,
 			Data:          data,
 			MissingFields: missingFields,
 			Message: fmt.Sprintf("缺少必填字段，请重新生成包含以下字段的完整数据: %s",
 				strings.Join(missingFields, ", ")),
 		}
-	} else {
-		// 所有必填字段都存在
-		output = StructuredOutputOutput{
+		jsonResult, err := json.Marshal(output)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal result: %w", err)
+		}
+		return string(jsonResult), nil
+	}
+
+	//根据配置决定输出格式
+	if t.config.WrapData {
+		// 包装在data字段中
+		output := StructuredOutputOutput{
 			Status:  1,
 			Data:    data,
 			Message: "成功解析结构化数据",
 		}
+		jsonResult, err := json.Marshal(output)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal result: %w", err)
+		}
+		return string(jsonResult), nil
 	}
 
-	jsonResult, err := json.Marshal(output)
+	// 直接返回原始数据（不包装）
+	jsonResult, err := json.Marshal(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal result: %w", err)
 	}
-
 	return string(jsonResult), nil
 }
 
